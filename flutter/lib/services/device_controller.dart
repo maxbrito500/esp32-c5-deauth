@@ -27,6 +27,13 @@ class DeviceController extends ChangeNotifier {
   String attackMode = 'broadcast';
   bool scanning = false;
   String rawLog = '';
+  DateTime? _lastScanTime;
+
+  bool get scanIsStale {
+    if (aps.isEmpty) return true;
+    if (_lastScanTime == null) return true;
+    return DateTime.now().difference(_lastScanTime!) > const Duration(minutes: 5);
+  }
 
   // Parse state
   final StringBuffer _buf = StringBuffer();
@@ -141,7 +148,10 @@ class DeviceController extends ChangeNotifier {
          line.startsWith('scan: no APs') ||
          line.startsWith('scan: failed'))) {
       scanning = false;
-      if (RegExp(r'scan: \d+ APs').hasMatch(line)) conn.send('ls');
+      if (RegExp(r'scan: \d+ APs').hasMatch(line)) {
+        _lastScanTime = DateTime.now();
+        conn.send('ls');
+      }
       return;
     }
     if (line == '(no APs — run `scan` first)') {
@@ -208,6 +218,8 @@ class DeviceController extends ChangeNotifier {
   Future<void> startAttack(int secs) => conn.send('start $secs');
 
   Future<void> stopAttack() => conn.send('stop');
+
+  Future<void> nuke(int secs) => conn.send('nuke $secs');
 
   Future<void> addToWhitelist(String mac, [String kind = 'auto']) async {
     await conn.send('wl add $mac $kind');

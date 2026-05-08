@@ -87,6 +87,10 @@ class ApiServer {
         case 'POST /attack/stop':
           await ctrl.stopAttack();
           _ok(req, {'ok': true});
+        case 'POST /nuke':
+          final body = jsonDecode(await _readBody(req)) as Map<String, dynamic>;
+          await ctrl.nuke((body['secs'] as int?) ?? 30);
+          _ok(req, {'ok': true});
         case 'POST /cmd':
           final body = jsonDecode(await _readBody(req)) as Map<String, dynamic>;
           final cmd = body['cmd'] as String?;

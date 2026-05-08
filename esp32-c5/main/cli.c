@@ -193,6 +193,11 @@ static void run_line(char *line)
         attack_start(d);
         return;
     }
+    if (strcasecmp(cmd, "nuke") == 0) {
+        uint32_t d = (argc >= 2) ? (uint32_t)atoi(argv[1]) : 30;
+        attack_nuke_start(d);
+        return;
+    }
     if (strcasecmp(cmd, "stop") == 0) {
         attack_stop();
         return;

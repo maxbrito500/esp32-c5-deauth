@@ -49,6 +49,85 @@ class _DeviceViewState extends State<_DeviceView>
     super.dispose();
   }
 
+  Future<void> _showNukeDialog(BuildContext context) async {
+    final ctrl = context.read<DeviceController>();
+
+    // Scan first if stale or empty, showing a progress overlay.
+    if (ctrl.scanIsStale) {
+      if (!context.mounted) return;
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const AlertDialog(
+          content: Row(children: [
+            CircularProgressIndicator(),
+            SizedBox(width: 16),
+            Text('Scanning networks…'),
+          ]),
+        ),
+      );
+      await ctrl.scanWifi();
+      // Wait for scan to finish (or 15s timeout).
+      final done = Completer<void>();
+      void listener() { if (!ctrl.scanning) done.complete(); }
+      ctrl.addListener(listener);
+      await Future.any([done.future, Future.delayed(const Duration(seconds: 15))]);
+      ctrl.removeListener(listener);
+      if (context.mounted) Navigator.of(context).pop(); // dismiss scanning dialog
+    }
+
+    if (!context.mounted) return;
+
+    final durationCtrl = TextEditingController(text: '30');
+    final apCount = ctrl.aps.length;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(children: [
+          Icon(Icons.bolt, color: Colors.red.shade400),
+          const SizedBox(width: 8),
+          const Text('Nuke!'),
+        ]),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Deauths ALL $apCount networks in range simultaneously.'),
+            const SizedBox(height: 16),
+            TextField(
+              controller: durationCtrl,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Duration (seconds)',
+                border: OutlineInputBorder(),
+                isDense: true,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red.shade700),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Fire!'),
+          ),
+        ],
+      ),
+    );
+
+    durationCtrl.dispose();
+    if (confirmed != true || !context.mounted) return;
+
+    final secs = int.tryParse(durationCtrl.text) ?? 30;
+    await ctrl.nuke(secs);
+  }
+
   Future<bool> _confirmDisconnect(BuildContext context) async {
     final ctrl = context.read<DeviceController>();
     final result = await showDialog<bool>(
@@ -106,11 +185,21 @@ class _DeviceViewState extends State<_DeviceView>
                   Navigator.of(context).push(
                     MaterialPageRoute(builder: (_) => const SettingsScreen()),
                   );
+                } else if (value == 'nuke') {
+                  _showNukeDialog(context);
                 }
               },
-              itemBuilder: (_) => const [
-                PopupMenuItem(value: 'console', child: Text('Console')),
-                PopupMenuItem(value: 'settings', child: Text('Settings')),
+              itemBuilder: (_) => [
+                const PopupMenuItem(value: 'console', child: Text('Console')),
+                const PopupMenuItem(value: 'settings', child: Text('Settings')),
+                const PopupMenuDivider(),
+                PopupMenuItem(
+                  value: 'nuke',
+                  child: Text('Nuke!',
+                      style: TextStyle(
+                          color: Colors.red.shade300,
+                          fontWeight: FontWeight.bold)),
+                ),
               ],
             ),
           ],
@@ -150,6 +239,17 @@ class _NetworksTab extends StatefulWidget {
 class _NetworksTabState extends State<_NetworksTab> {
   final _durationCtrl = TextEditingController(text: '30');
   static const _modes = ['broadcast', 'unicast', 'disassoc', 'authflood', 'mixed'];
+
+  @override
+  void initState() {
+    super.initState();
+    // Auto-scan if no networks are loaded yet — give the 'ls' response 2s to arrive first.
+    Future.delayed(const Duration(seconds: 2), () {
+      if (!mounted) return;
+      final ctrl = context.read<DeviceController>();
+      if (ctrl.aps.isEmpty && !ctrl.scanning && !ctrl.attacking) ctrl.scanWifi();
+    });
+  }
 
   @override
   void dispose() {

