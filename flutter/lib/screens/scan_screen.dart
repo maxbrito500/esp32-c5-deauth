@@ -4,10 +4,13 @@ import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:provider/provider.dart';
 
+import '../services/api_server.dart';
 import '../services/device_controller.dart';
 import '../services/nus_client.dart';
 import 'device_screen.dart';
+import 'settings_screen.dart';
 
 class ScanScreen extends StatefulWidget {
   const ScanScreen({super.key});
@@ -95,12 +98,15 @@ class _ScanScreenState extends State<ScanScreen> {
       final conn = await _client.connect(device);
       final controller = DeviceController(conn);
       if (!mounted) return;
+      final api = context.read<ApiServer>();
+      api.attach(controller);
       Navigator.of(context).pop(); // dismiss spinner
-      Navigator.of(context).push(
+      await Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => DeviceScreen(controller: controller),
         ),
       );
+      api.detach();
     } catch (e) {
       if (!mounted) return;
       Navigator.of(context).pop();
@@ -124,6 +130,19 @@ class _ScanScreenState extends State<ScanScreen> {
                 _maybeStartScan();
               }
             },
+          ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.menu),
+            onSelected: (value) {
+              if (value == 'settings') {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                );
+              }
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'settings', child: Text('Settings')),
+            ],
           ),
         ],
       ),

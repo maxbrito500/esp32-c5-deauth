@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import '../models/acl_entry.dart';
 import '../models/ap_entry.dart';
 import '../services/device_controller.dart';
+import 'settings_screen.dart';
 
 class DeviceScreen extends StatelessWidget {
   const DeviceScreen({super.key, required this.controller});
@@ -28,6 +29,9 @@ class _DeviceView extends StatefulWidget {
   @override
   State<_DeviceView> createState() => _DeviceViewState();
 }
+
+// Console tab index — used by the menu item to switch directly to it.
+const _kConsoleTab = 3;
 
 class _DeviceViewState extends State<_DeviceView>
     with SingleTickerProviderStateMixin {
@@ -92,6 +96,22 @@ class _DeviceViewState extends State<_DeviceView>
                   nav.pop();
                 }
               },
+            ),
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.menu),
+              onSelected: (value) {
+                if (value == 'console') {
+                  _tabs.animateTo(_kConsoleTab);
+                } else if (value == 'settings') {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                  );
+                }
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'console', child: Text('Console')),
+                PopupMenuItem(value: 'settings', child: Text('Settings')),
+              ],
             ),
           ],
           bottom: TabBar(
