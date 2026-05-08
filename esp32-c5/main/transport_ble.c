@@ -47,6 +47,7 @@ static uint16_t s_tx_attr_handle = 0;
 static volatile bool s_notify_enabled = false;
 static uint8_t s_own_addr_type;
 static StreamBufferHandle_t s_tx_sb;
+static struct ble_npl_callout s_adv_callout;
 
 static int gap_event_cb(struct ble_gap_event *event, void *arg);
 static void start_advertising(void);
@@ -91,6 +92,12 @@ static const struct ble_gatt_svc_def s_svcs[] = {
     { 0 }
 };
 
+static void adv_callout_fn(struct ble_npl_event *ev)
+{
+    (void)ev;
+    start_advertising();
+}
+
 static void start_advertising(void)
 {
     struct ble_hs_adv_fields fields = {0};
@@ -110,16 +117,22 @@ static void start_advertising(void)
     rsp.uuids128_is_complete = 1;
     rc = ble_gap_adv_rsp_set_fields(&rsp);
     if (rc != 0) ESP_LOGW(TAG, "adv_rsp_set_fields rc=%d", rc);
+
     struct ble_gap_adv_params adv = {0};
     adv.conn_mode = BLE_GAP_CONN_MODE_UND;
     adv.disc_mode = BLE_GAP_DISC_MODE_GEN;
     adv.itvl_min  = BLE_GAP_ADV_FAST_INTERVAL1_MIN;
     adv.itvl_max  = BLE_GAP_ADV_FAST_INTERVAL1_MAX;
     rc = ble_gap_adv_start(s_own_addr_type, NULL, BLE_HS_FOREVER, &adv, gap_event_cb, NULL);
-    if (rc != 0 && rc != BLE_HS_EALREADY)
-        ESP_LOGW(TAG, "adv_start rc=%d", rc);
-    else
+    if (rc == 0 || rc == BLE_HS_EALREADY) {
         ESP_LOGI(TAG, "advertising as ESP32C5-Deauther");
+    } else {
+        /* Stack not ready yet (e.g. BLE_HS_EBUSY right after disconnect).
+         * Retry from the host event queue after 200 ms. */
+        ESP_LOGW(TAG, "adv_start rc=%d, retry in 200 ms", rc);
+        ble_npl_callout_reset(&s_adv_callout,
+                              ble_npl_time_ms_to_ticks32(200));
+    }
 }
 
 static int gap_event_cb(struct ble_gap_event *event, void *arg)
@@ -197,6 +210,9 @@ void transport_ble_init(void)
     int rc = nimble_port_init();
     io_log("ble: nimble_port_init rc=%d\r\n", rc);
     if (rc != 0) return;
+
+    ble_npl_callout_init(&s_adv_callout, nimble_port_get_dflt_eventq(),
+                         adv_callout_fn, NULL);
 
     ble_hs_cfg.sync_cb  = on_sync;
     ble_hs_cfg.reset_cb = on_reset;

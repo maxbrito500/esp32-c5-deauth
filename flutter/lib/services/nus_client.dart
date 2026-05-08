@@ -13,6 +13,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Platform;
 
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
@@ -60,15 +61,19 @@ class NusClient {
       final filtered = results.where(_looksLikeDevice).toList();
       if (!controller.isClosed) controller.add(filtered);
     });
-    FlutterBluePlus.startScan(
-      timeout: timeout,
-      withServices: [NusUuids.service],
-      androidScanMode: AndroidScanMode.lowLatency,
-    ).catchError((_) {
-      // On some platforms the service-UUID filter rejects unknown UUIDs;
-      // fall back to an unfiltered scan if needed.
+    // On Android, filter by service UUID for efficiency. On Linux/macOS/
+    // Windows, BlueZ and CoreBluetooth only match UUIDs in the primary
+    // advertisement — our NUS UUID is in the scan response to stay within
+    // the 31-byte limit, so the filter would silently drop the device.
+    if (Platform.isAndroid) {
+      FlutterBluePlus.startScan(
+        timeout: timeout,
+        withServices: [NusUuids.service],
+        androidScanMode: AndroidScanMode.lowLatency,
+      ).catchError((_) => FlutterBluePlus.startScan(timeout: timeout));
+    } else {
       FlutterBluePlus.startScan(timeout: timeout);
-    });
+    }
     controller.onCancel = () async {
       await stopScan();
     };

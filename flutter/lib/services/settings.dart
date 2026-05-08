@@ -7,7 +7,7 @@ class Settings extends ChangeNotifier {
   static const _defaultPort = 7331;
 
   int _apiPort = _defaultPort;
-  bool _apiEnabled = false;
+  bool _apiEnabled = true;
 
   int get apiPort => _apiPort;
   bool get apiEnabled => _apiEnabled;

@@ -6,25 +6,27 @@ import 'services/api_server.dart';
 import 'services/settings.dart';
 
 void main() {
-  runApp(const DeautherApp());
+  final settings = Settings();
+  final api = ApiServer(settings);
+  runApp(DeautherApp(settings: settings, api: api));
 }
 
 class DeautherApp extends StatelessWidget {
-  const DeautherApp({super.key});
+  const DeautherApp({super.key, required this.settings, required this.api});
+
+  final Settings settings;
+  final ApiServer api;
 
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => Settings()),
-        ProxyProvider<Settings, ApiServer>(
-          create: (ctx) => ApiServer(ctx.read<Settings>()),
-          update: (_, settings, server) => server!,
-          dispose: (_, server) => server.dispose(),
-        ),
+        ChangeNotifierProvider.value(value: settings),
+        Provider.value(value: api),
       ],
       child: MaterialApp(
         title: 'ESP32-C5 Deauther',
+        debugShowCheckedModeBanner: false,
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(
             seedColor: Colors.tealAccent,
@@ -32,7 +34,6 @@ class DeautherApp extends StatelessWidget {
           ),
           useMaterial3: true,
         ),
-        debugShowCheckedModeBanner: false,
         home: const ScanScreen(),
       ),
     );
