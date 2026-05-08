@@ -1,0 +1,548 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
+
+import '../models/acl_entry.dart';
+import '../models/ap_entry.dart';
+import '../services/device_controller.dart';
+
+class DeviceScreen extends StatelessWidget {
+  const DeviceScreen({super.key, required this.controller});
+
+  final DeviceController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return ChangeNotifierProvider.value(
+      value: controller,
+      child: const _DeviceView(),
+    );
+  }
+}
+
+class _DeviceView extends StatefulWidget {
+  const _DeviceView();
+
+  @override
+  State<_DeviceView> createState() => _DeviceViewState();
+}
+
+class _DeviceViewState extends State<_DeviceView>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabs;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabs = TabController(length: 4, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabs.dispose();
+    super.dispose();
+  }
+
+  Future<bool> _confirmDisconnect(BuildContext context) async {
+    final ctrl = context.read<DeviceController>();
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Disconnect?'),
+        content: Text(
+            'Disconnect from ${ctrl.conn.device.platformName.isNotEmpty ? ctrl.conn.device.platformName : "device"}?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Stay')),
+          TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Disconnect')),
+        ],
+      ),
+    );
+    return result ?? false;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ctrl = context.watch<DeviceController>();
+    final name = ctrl.conn.device.platformName.isNotEmpty
+        ? ctrl.conn.device.platformName
+        : 'Connected';
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        final nav = Navigator.of(context);
+        if (await _confirmDisconnect(context) && context.mounted) nav.pop();
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(name),
+          actions: [
+            IconButton(
+              tooltip: 'Disconnect',
+              icon: const Icon(Icons.bluetooth_disabled),
+              onPressed: () async {
+                final nav = Navigator.of(context);
+                if (await _confirmDisconnect(context) && context.mounted) {
+                  nav.pop();
+                }
+              },
+            ),
+          ],
+          bottom: TabBar(
+            controller: _tabs,
+            tabs: const [
+              Tab(icon: Icon(Icons.wifi), text: 'Networks'),
+              Tab(icon: Icon(Icons.check_circle_outline), text: 'Whitelist'),
+              Tab(icon: Icon(Icons.block), text: 'Blacklist'),
+              Tab(icon: Icon(Icons.terminal), text: 'Console'),
+            ],
+          ),
+        ),
+        body: TabBarView(
+          controller: _tabs,
+          children: const [
+            _NetworksTab(),
+            _AclTab(isWhitelist: true),
+            _AclTab(isWhitelist: false),
+            _ConsoleTab(),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─── Networks tab ────────────────────────────────────────────────────────────
+
+class _NetworksTab extends StatefulWidget {
+  const _NetworksTab();
+
+  @override
+  State<_NetworksTab> createState() => _NetworksTabState();
+}
+
+class _NetworksTabState extends State<_NetworksTab> {
+  final _durationCtrl = TextEditingController(text: '30');
+  static const _modes = ['broadcast', 'unicast', 'disassoc', 'authflood', 'mixed'];
+
+  @override
+  void dispose() {
+    _durationCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ctrl = context.watch<DeviceController>();
+    final aps24 = ctrl.aps.where((a) => !a.is5ghz).toList();
+    final aps5 = ctrl.aps.where((a) => a.is5ghz).toList();
+
+    return Column(
+      children: [
+        _attackBar(context, ctrl),
+        Expanded(
+          child: ctrl.aps.isEmpty
+              ? _emptyAps(ctrl)
+              : ListView(
+                  children: [
+                    if (aps24.isNotEmpty) ...[
+                      _bandHeader('2.4 GHz', Colors.teal),
+                      ...aps24.map((ap) => _apTile(context, ctrl, ap)),
+                    ],
+                    if (aps5.isNotEmpty) ...[
+                      _bandHeader('5 GHz', Colors.purple),
+                      ...aps5.map((ap) => _apTile(context, ctrl, ap)),
+                    ],
+                  ],
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _attackBar(BuildContext context, DeviceController ctrl) {
+    return Container(
+      color: Theme.of(context).colorScheme.surface,
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      child: Row(
+        children: [
+          // Scan button
+          OutlinedButton.icon(
+            onPressed: ctrl.scanning ? null : ctrl.scanWifi,
+            icon: ctrl.scanning
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.search, size: 18),
+            label: Text(ctrl.scanning ? 'Scanning…' : 'Scan'),
+          ),
+          const SizedBox(width: 8),
+          // Mode picker
+          Expanded(
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<String>(
+                value: _modes.contains(ctrl.attackMode) ? ctrl.attackMode : 'broadcast',
+                isExpanded: true,
+                items: _modes
+                    .map((m) => DropdownMenuItem(value: m, child: Text(m)))
+                    .toList(),
+                onChanged: ctrl.attacking
+                    ? null
+                    : (v) { if (v != null) ctrl.setMode(v); },
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Duration field
+          SizedBox(
+            width: 56,
+            child: TextField(
+              controller: _durationCtrl,
+              keyboardType: TextInputType.number,
+              textAlign: TextAlign.center,
+              decoration: const InputDecoration(
+                  labelText: 'sec', isDense: true, border: OutlineInputBorder()),
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              enabled: !ctrl.attacking,
+            ),
+          ),
+          const SizedBox(width: 8),
+          // Start / Stop
+          ctrl.attacking
+              ? ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red.shade700),
+                  onPressed: ctrl.stopAttack,
+                  icon: const Icon(Icons.stop, size: 18),
+                  label: const Text('Stop'),
+                )
+              : ElevatedButton.icon(
+                  onPressed: (ctrl.selected24Idx == null && ctrl.selected5Idx == null)
+                      ? null
+                      : () {
+                          final secs = int.tryParse(_durationCtrl.text) ?? 30;
+                          ctrl.startAttack(secs);
+                        },
+                  icon: const Icon(Icons.bolt, size: 18),
+                  label: const Text('Deauth'),
+                ),
+        ],
+      ),
+    );
+  }
+
+  Widget _emptyAps(DeviceController ctrl) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.wifi_off, size: 48, color: Colors.grey),
+          const SizedBox(height: 12),
+          const Text('No networks — tap Scan'),
+          const SizedBox(height: 12),
+          if (ctrl.scanning) const CircularProgressIndicator(),
+        ],
+      ),
+    );
+  }
+
+  Widget _bandHeader(String label, Color color) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      child: Row(children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+          decoration: BoxDecoration(
+            color: color.withAlpha(50),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: color.withAlpha(150)),
+          ),
+          child: Text(label,
+              style: TextStyle(
+                  color: color,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12)),
+        ),
+      ]),
+    );
+  }
+
+  Widget _apTile(BuildContext context, DeviceController ctrl, ApEntry ap) {
+    final isSelected = ap.is5ghz
+        ? ctrl.selected5Idx == ap.idx
+        : ctrl.selected24Idx == ap.idx;
+    final color = ap.is5ghz ? Colors.purple : Colors.teal;
+    return ListTile(
+      dense: true,
+      leading: Container(
+        width: 20,
+        height: 20,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: isSelected ? color : Colors.transparent,
+          border: Border.all(color: isSelected ? color : Colors.grey, width: 2),
+        ),
+      ),
+      title: Text(
+        ap.ssid.isNotEmpty ? ap.ssid : '(hidden)',
+        style: TextStyle(
+          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+        ),
+      ),
+      subtitle: Text('ch ${ap.channel}  ${ap.bssid}  ${ap.rssi} dBm'),
+      selected: isSelected,
+      onTap: ctrl.attacking
+          ? null
+          : () {
+              if (ap.is5ghz) {
+                ctrl.selectAp5(ap.idx);
+              } else {
+                ctrl.selectAp24(ap.idx);
+              }
+            },
+    );
+  }
+}
+
+// ─── ACL tab (Whitelist / Blacklist) ─────────────────────────────────────────
+
+class _AclTab extends StatefulWidget {
+  const _AclTab({required this.isWhitelist});
+
+  final bool isWhitelist;
+
+  @override
+  State<_AclTab> createState() => _AclTabState();
+}
+
+class _AclTabState extends State<_AclTab> {
+  final _macCtrl = TextEditingController();
+  String _kind = 'auto';
+
+  @override
+  void dispose() {
+    _macCtrl.dispose();
+    super.dispose();
+  }
+
+  List<AclEntry> _list(DeviceController ctrl) =>
+      widget.isWhitelist ? ctrl.whitelist : ctrl.blacklist;
+
+  Future<void> _add(DeviceController ctrl) async {
+    final mac = _macCtrl.text.trim();
+    if (mac.isEmpty) return;
+    if (widget.isWhitelist) {
+      await ctrl.addToWhitelist(mac, _kind);
+    } else {
+      await ctrl.addToBlacklist(mac, _kind);
+    }
+    _macCtrl.clear();
+  }
+
+  Future<void> _remove(DeviceController ctrl, String mac) async {
+    if (widget.isWhitelist) {
+      await ctrl.removeFromWhitelist(mac);
+    } else {
+      await ctrl.removeFromBlacklist(mac);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ctrl = context.watch<DeviceController>();
+    final entries = _list(ctrl);
+    final accent = widget.isWhitelist ? Colors.teal : Colors.red;
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _macCtrl,
+                  decoration: InputDecoration(
+                    labelText: 'MAC address (XX:XX:XX:XX:XX:XX)',
+                    isDense: true,
+                    border: const OutlineInputBorder(),
+                    prefixIcon: Icon(
+                        widget.isWhitelist ? Icons.check_circle_outline : Icons.block,
+                        color: accent),
+                  ),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[0-9A-Fa-f:]')),
+                    LengthLimitingTextInputFormatter(17),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: _kind,
+                  items: const [
+                    DropdownMenuItem(value: 'auto', child: Text('auto')),
+                    DropdownMenuItem(value: 'bssid', child: Text('bssid')),
+                    DropdownMenuItem(value: 'sta', child: Text('sta')),
+                  ],
+                  onChanged: (v) { if (v != null) setState(() => _kind = v); },
+                ),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton(
+                onPressed: () => _add(ctrl),
+                child: const Text('Add'),
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        Expanded(
+          child: entries.isEmpty
+              ? Center(
+                  child: Text('${widget.isWhitelist ? "Whitelist" : "Blacklist"} is empty',
+                      style: const TextStyle(color: Colors.grey)))
+              : ListView.separated(
+                  itemCount: entries.length,
+                  separatorBuilder: (_, _) => const Divider(height: 1),
+                  itemBuilder: (_, i) {
+                    final e = entries[i];
+                    return ListTile(
+                      dense: true,
+                      leading: Icon(
+                          widget.isWhitelist ? Icons.check_circle_outline : Icons.block,
+                          color: accent),
+                      title: Text(e.mac,
+                          style: const TextStyle(fontFamily: 'monospace')),
+                      subtitle: Text(e.kind),
+                      trailing: IconButton(
+                        icon: const Icon(Icons.delete_outline),
+                        tooltip: 'Remove',
+                        onPressed: () => _remove(ctrl, e.mac),
+                      ),
+                    );
+                  },
+                ),
+        ),
+      ],
+    );
+  }
+}
+
+// ─── Console tab ─────────────────────────────────────────────────────────────
+
+class _ConsoleTab extends StatefulWidget {
+  const _ConsoleTab();
+
+  @override
+  State<_ConsoleTab> createState() => _ConsoleTabState();
+}
+
+class _ConsoleTabState extends State<_ConsoleTab> {
+  final _input = TextEditingController();
+  final _scroll = ScrollController();
+  String _prevLog = '';
+
+  @override
+  void dispose() {
+    _input.dispose();
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scroll.hasClients) return;
+      _scroll.animateTo(
+        _scroll.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 100),
+        curve: Curves.easeOut,
+      );
+    });
+  }
+
+  Future<void> _send(BuildContext context, String cmd) async {
+    cmd = cmd.trim();
+    if (cmd.isEmpty) return;
+    final ctrl = context.read<DeviceController>();
+    await ctrl.conn.send(cmd);
+    _input.clear();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ctrl = context.watch<DeviceController>();
+    if (ctrl.rawLog != _prevLog) {
+      _prevLog = ctrl.rawLog;
+      _scrollToBottom();
+    }
+    return Column(
+      children: [
+        Expanded(
+          child: Container(
+            width: double.infinity,
+            color: Colors.black,
+            child: Scrollbar(
+              controller: _scroll,
+              child: SingleChildScrollView(
+                controller: _scroll,
+                padding: const EdgeInsets.all(8),
+                child: SelectableText(
+                  ctrl.rawLog,
+                  style: const TextStyle(
+                    color: Color(0xFF8FFF8F),
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    height: 1.3,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        const Divider(height: 1),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _input,
+                  decoration: const InputDecoration(
+                    hintText: 'raw command',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                  textInputAction: TextInputAction.send,
+                  onSubmitted: (v) => _send(context, v),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.deny(RegExp(r'\n')),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                onPressed: () => _send(context, _input.text),
+                icon: const Icon(Icons.send, size: 16),
+                label: const Text('Send'),
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                tooltip: 'Clear log',
+                icon: const Icon(Icons.clear_all),
+                onPressed: () => context.read<DeviceController>().clearLog(),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}

@@ -1,0 +1,34 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build (idf.py)",
+            "type": "shell",
+            "command": "./flash.sh --no-flash --no-reset",
+            "problemMatcher": ["$gcc"],
+            "group": { "kind": "build", "isDefault": true },
+            "presentation": { "panel": "dedicated", "reveal": "always" }
+        },
+        {
+            "label": "Build + Flash + Reset",
+            "type": "shell",
+            "command": "./flash.sh",
+            "problemMatcher": ["$gcc"],
+            "presentation": { "panel": "dedicated", "reveal": "always" }
+        },
+        {
+            "label": "Flash only (skip build)",
+            "type": "shell",
+            "command": "./flash.sh --no-build",
+            "problemMatcher": [],
+            "presentation": { "panel": "dedicated", "reveal": "always" }
+        },
+        {
+            "label": "Open serial console",
+            "type": "shell",
+            "command": "./serial.sh",
+            "problemMatcher": [],
+            "presentation": { "panel": "dedicated", "reveal": "always" }
+        }
+    ]
+}

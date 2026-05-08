@@ -1,0 +1,25 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "io.c"
+        "cli.c"
+        "transport_serial.c"
+        "transport_ble.c"
+        "frames.c"
+        "wifi_ctrl.c"
+        "targets.c"
+        "acl.c"
+        "sniffer.c"
+        "attack.c"
+    INCLUDE_DIRS "."
+    PRIV_REQUIRES
+        nvs_flash
+        esp_wifi
+        esp_netif
+        esp_event
+        esp_timer
+        driver
+        vfs
+        hal
+        bt
+)

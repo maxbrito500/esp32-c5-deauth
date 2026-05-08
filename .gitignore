@@ -1,0 +1,21 @@
+# ESP-IDF build output and managed dependencies
+build/
+sdkconfig.old
+managed_components/
+
+# Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+pubspec.lock
+
+# Common compiled/generated artifacts
+*.o
+*.a
+*.elf
+*.bin
+*.map
+__pycache__/
+*.pyc
+.DS_Store

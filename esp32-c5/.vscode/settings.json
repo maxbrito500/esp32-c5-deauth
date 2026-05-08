@@ -1,0 +1,22 @@
+{
+    "idf.adapterTargetName": "esp32c5",
+    "idf.flashType": "JTAG",
+    "idf.openOcdConfigs": [
+        "board/esp32c5-builtin.cfg"
+    ],
+    "idf.portWin": "COM3",
+    "idf.port": "/dev/ttyACM0",
+    "idf.monitorBaudRate": "115200",
+    "idf.notificationMode": "All",
+    "idf.saveScdAfterBuild": true,
+    "C_Cpp.default.configurationProvider": "espressif.esp-idf-extension",
+    "C_Cpp.intelliSenseEngine": "default",
+    "files.associations": {
+        "*.h": "c",
+        "*.c": "c"
+    },
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true,
+    "files.trimTrailingWhitespace": true,
+    "files.insertFinalNewline": true
+}
