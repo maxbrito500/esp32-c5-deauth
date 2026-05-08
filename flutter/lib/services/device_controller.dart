@@ -241,7 +241,6 @@ class DeviceController extends ChangeNotifier {
   @override
   void dispose() {
     _sub?.cancel();
-    conn.disconnect();
     super.dispose();
   }
 }

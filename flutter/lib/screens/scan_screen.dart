@@ -118,25 +118,32 @@ class _ScanScreenState extends State<ScanScreen> {
       barrierDismissible: false,
       builder: (_) => const Center(child: CircularProgressIndicator()),
     );
+    DeviceController? controller;
     try {
       final conn = await _client.connect(device);
-      final controller = DeviceController(conn);
+      controller = DeviceController(conn);
       if (!mounted) return;
       final api = context.read<ApiServer>();
       api.attach(controller);
       Navigator.of(context).pop(); // dismiss spinner
       await Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => DeviceScreen(controller: controller)),
+        MaterialPageRoute(builder: (_) => DeviceScreen(controller: controller!)),
       );
       api.detach();
+      // Await the full BLE teardown so the ESP32 receives a clean disconnect
+      // and restarts advertising before we scan again.
+      await controller.conn.disconnect();
     } catch (e) {
       if (!mounted) return;
       Navigator.of(context).pop();
       setState(() => _error = '$e');
     } finally {
+      controller?.dispose();
       if (mounted) {
         setState(() => _connecting = false);
-        _maybeStartScan(); // resume scanning after disconnect or error
+        // Give the BLE stack and the ESP32 a moment to settle before rescanning.
+        await Future.delayed(const Duration(seconds: 2));
+        if (mounted) _maybeStartScan();
       }
     }
   }
