@@ -25,19 +25,31 @@ class _ScanScreenState extends State<ScanScreen> {
   StreamSubscription<bool>? _scanningSub;
   List<ScanResult> _results = [];
   bool _scanning = false;
+  bool _connecting = false;
+  Timer? _rescanTimer;
   String? _error;
 
   @override
   void initState() {
     super.initState();
     _scanningSub = FlutterBluePlus.isScanning.listen((s) {
-      if (mounted) setState(() => _scanning = s);
+      if (!mounted) return;
+      final wasScanning = _scanning;
+      setState(() => _scanning = s);
+      // When a scan cycle ends naturally, schedule the next one in 5 seconds.
+      if (wasScanning && !s && !_connecting) {
+        _rescanTimer?.cancel();
+        _rescanTimer = Timer(const Duration(seconds: 5), () {
+          if (mounted && !_connecting) _maybeStartScan();
+        });
+      }
     });
     _maybeStartScan();
   }
 
   @override
   void dispose() {
+    _rescanTimer?.cancel();
     _resultsSub?.cancel();
     _scanningSub?.cancel();
     _client.stopScan();
@@ -68,27 +80,39 @@ class _ScanScreenState extends State<ScanScreen> {
     final state = await FlutterBluePlus.adapterState.first;
     if (state == BluetoothAdapterState.on) return true;
     if (Platform.isAndroid) {
-      try { await FlutterBluePlus.turnOn(); return true; } catch (_) {}
+      try {
+        await FlutterBluePlus.turnOn();
+        return true;
+      } catch (_) {}
     }
     if (mounted) setState(() => _error = 'Bluetooth is off — enable it and retry.');
     return false;
   }
 
   void _startScan() {
+    _rescanTimer?.cancel();
     setState(() {
       _error = null;
       _results = [];
     });
     _resultsSub?.cancel();
     _resultsSub = _client.scan().listen((rs) {
-      if (mounted) setState(() => _results = rs);
+      if (!mounted) return;
+      setState(() => _results = rs);
+      // Auto-connect when exactly one device is visible.
+      if (rs.length == 1 && !_connecting) _connect(rs.first.device);
     }, onError: (e) {
       if (mounted) setState(() => _error = 'scan error: $e');
     });
   }
 
   Future<void> _connect(BluetoothDevice device) async {
-    setState(() => _error = null);
+    if (_connecting) return;
+    _rescanTimer?.cancel();
+    setState(() {
+      _error = null;
+      _connecting = true;
+    });
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -102,15 +126,18 @@ class _ScanScreenState extends State<ScanScreen> {
       api.attach(controller);
       Navigator.of(context).pop(); // dismiss spinner
       await Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => DeviceScreen(controller: controller),
-        ),
+        MaterialPageRoute(builder: (_) => DeviceScreen(controller: controller)),
       );
       api.detach();
     } catch (e) {
       if (!mounted) return;
       Navigator.of(context).pop();
       setState(() => _error = '$e');
+    } finally {
+      if (mounted) {
+        setState(() => _connecting = false);
+        _maybeStartScan(); // resume scanning after disconnect or error
+      }
     }
   }
 
@@ -125,6 +152,7 @@ class _ScanScreenState extends State<ScanScreen> {
             tooltip: _scanning ? 'Stop scan' : 'Scan',
             onPressed: () {
               if (_scanning) {
+                _rescanTimer?.cancel();
                 _client.stopScan();
               } else {
                 _maybeStartScan();
@@ -160,7 +188,7 @@ class _ScanScreenState extends State<ScanScreen> {
             child: _results.isEmpty
                 ? Center(
                     child: Text(
-                      _scanning ? 'Scanning…' : 'No devices yet — tap refresh',
+                      _scanning ? 'Scanning…' : 'No devices found',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   )
