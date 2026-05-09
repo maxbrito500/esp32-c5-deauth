@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 
 import '../models/acl_entry.dart';
 import '../models/ap_entry.dart';
+import '../models/sta_entry.dart';
 import 'nus_client.dart';
 
 class DeviceController extends ChangeNotifier {
@@ -14,6 +15,7 @@ class DeviceController extends ChangeNotifier {
     conn.send('sel ls');
     conn.send('wl ls');
     conn.send('bl ls');
+    conn.send('dev ls');
   }
 
   final NusConnection conn;
@@ -37,6 +39,10 @@ class DeviceController extends ChangeNotifier {
   DateTime? nukeStartedAt;
   int nukeDurationSecs = 0;
   int nukeApCount = 0;
+  int nukePkts = 0;
+
+  List<StaEntry> stations = const [];
+  bool deviceScanning = false;
 
   bool get scanIsStale {
     if (aps.isEmpty) return true;
@@ -52,8 +58,10 @@ class DeviceController extends ChangeNotifier {
   final List<ApEntry> _tmpAps = [];
   final List<AclEntry> _tmpWl = [];
   final List<AclEntry> _tmpBl = [];
+  bool _inStas = false;
+  final List<StaEntry> _tmpStations = [];
 
-  static final _reNuke    = RegExp(r'^nuke: (\d+)s\s+aps=(\d+)');
+  static final _reNuke    = RegExp(r'^nuke: (\d+)s\s+aps=(\d+)\s+pkts=(\d+)');
   static final _reAttack  = RegExp(r'^attack: (\d+)s\s+aps=(\d+)');
   static final _reSelLine = RegExp(r'^sel:([ \d]*)$');
   static final _reSelToggle = RegExp(r'^sel: (\d+) (on|off)$');
@@ -65,6 +73,8 @@ class DeviceController extends ChangeNotifier {
   static final _reBl = RegExp(
       r'^bl\s+([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+(auto|bssid|sta)');
   static final _reMode = RegExp(r'^mode: (\w+)$');
+  static final _reStaLine = RegExp(
+      r'^sta:\s+([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+(-?\d+)\s+(\d+)\s+([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})');
 
   void _onChunk(String chunk) {
     rawLog += chunk;
@@ -99,6 +109,12 @@ class DeviceController extends ChangeNotifier {
     blacklist = List.unmodifiable(_tmpBl.toList());
     _tmpBl.clear();
     _inBl = false;
+  }
+
+  void _commitStas() {
+    stations = List.unmodifiable(_tmpStations.toList());
+    _tmpStations.clear();
+    _inStas = false;
   }
 
   void _parseLine(String line) {
@@ -148,9 +164,33 @@ class DeviceController extends ChangeNotifier {
     if (line == '(wl empty)') { _tmpWl.clear(); _commitWl(); return; }
     if (line == '(bl empty)') { _tmpBl.clear(); _commitBl(); return; }
 
-    // Commit WL/BL if we were collecting and hit something else
+    // STA machine-readable rows: "sta: MAC RSSI CH BSSID"
+    final sm = _reStaLine.firstMatch(line);
+    if (sm != null) {
+      if (!_inStas) { _tmpStations.clear(); _inStas = true; }
+      _tmpStations.add(StaEntry(
+        mac:     sm.group(1)!.toUpperCase(),
+        rssi:    int.parse(sm.group(2)!),
+        channel: int.parse(sm.group(3)!),
+        bssid:   sm.group(4)!.toUpperCase(),
+      ));
+      return;
+    }
+    if (line == '(sta end)') { _commitStas(); return; }
+    if (line == '(no devices)') { stations = const []; _inStas = false; return; }
+
+    // Dev scan progress
+    if (line.startsWith('dev: start')) { deviceScanning = true; return; }
+    if (line.startsWith('dev: ') && line.contains('devices found')) {
+      deviceScanning = false;
+      conn.send('dev ls');
+      return;
+    }
+
+    // Commit WL/BL/Stas if we were collecting and hit something else
     if (_inWl) _commitWl();
     if (_inBl) _commitBl();
+    if (_inStas) _commitStas();
 
     // Sel toggle response: "sel: 3 on" / "sel: 3 off"
     final st = _reSelToggle.firstMatch(line);
@@ -188,6 +228,7 @@ class DeviceController extends ChangeNotifier {
         _lastScanTime = DateTime.now();
         conn.send('ls');
         conn.send('sel ls');
+        conn.send('dev ls');
       }
       return;
     }
@@ -207,6 +248,7 @@ class DeviceController extends ChangeNotifier {
     final nm = _reNuke.firstMatch(line);
     if (nm != null) {
       nukeApCount = int.parse(nm.group(2)!);
+      nukePkts = int.parse(nm.group(3)!);
       return;
     }
 
@@ -241,12 +283,14 @@ class DeviceController extends ChangeNotifier {
       attacking = false;
       nukeStartedAt = null;
       attackStartedAt = null;
+      nukePkts = 0;
       return;
     }
     if (line.startsWith('status: idle')) {
       attacking = false;
       nukeStartedAt = null;
       attackStartedAt = null;
+      nukePkts = 0;
       return;
     }
     if (line.startsWith('status: running')) {
@@ -270,6 +314,12 @@ class DeviceController extends ChangeNotifier {
     scanning = true;
     notifyListeners();
     await conn.send('scan');
+  }
+
+  Future<void> scanDevices() async {
+    deviceScanning = true;
+    notifyListeners();
+    await conn.send('dev scan');
   }
 
   Future<void> toggleAp(int idx) => conn.send('sel $idx');

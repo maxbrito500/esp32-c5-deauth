@@ -44,6 +44,7 @@ bool   targets_add_sta(const uint8_t *mac, const uint8_t *bssid, uint8_t channel
 int    targets_get_sta(uint16_t idx, target_sta_t *out);
 int    targets_sta_count(void);
 void   targets_list_stas(void);
+void   targets_list_stas_machine(void); /* machine-readable for Flutter */
 
 /* Multi-AP selection list (replaces the single t24/t5 slots). */
 #define TARGETS_MAX_SEL 16

@@ -13,6 +13,7 @@
 
 static uint8_t s_filter_bssid[6];
 static uint8_t s_channel;
+static bool s_sweep_mode = false;
 
 /* 802.11 frame control: bit positions
  * byte0 = | proto(2) | type(2) | subtype(4) |
@@ -58,7 +59,7 @@ static void cb(void *buf, wifi_promiscuous_pkt_type_t type)
         return;
     }
 
-    if (memcmp(bssid, s_filter_bssid, 6) != 0) return;
+    if (!s_sweep_mode && memcmp(bssid, s_filter_bssid, 6) != 0) return;
 
     /* skip multicast/broadcast STAs */
     if (sta[0] & 0x01) return;
@@ -98,4 +99,40 @@ int sniffer_run(uint8_t channel, const uint8_t *bssid, uint32_t seconds)
     int after = targets_sta_count();
     io_log("sniff: done, +%d STAs (total %d)\r\n", after - before, after);
     return after - before;
+}
+
+int sniffer_sweep(uint32_t seconds)
+{
+    if (seconds == 0) seconds = 13;
+    if (seconds > 120) seconds = 120;
+
+    io_log("dev: start — sweeping channels for %us\r\n", (unsigned)seconds);
+
+    /* Prioritise non-overlapping 2.4 GHz channels, then fill the rest. */
+    static const uint8_t channels[] = {1, 6, 11, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13};
+    int n_ch = sizeof(channels) / sizeof(channels[0]);
+    uint32_t dwell_ms = (seconds * 1000) / n_ch;
+    if (dwell_ms < 500) dwell_ms = 500;
+
+    s_sweep_mode = true;
+
+    wifi_promiscuous_filter_t filt = {
+        .filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA,
+    };
+    esp_wifi_set_promiscuous_filter(&filt);
+    esp_wifi_set_promiscuous_rx_cb(cb);
+    esp_wifi_set_promiscuous(true);
+
+    for (int i = 0; i < n_ch; i++) {
+        s_channel = channels[i];
+        esp_wifi_set_channel(channels[i], WIFI_SECOND_CHAN_NONE);
+        vTaskDelay(pdMS_TO_TICKS(dwell_ms));
+    }
+
+    esp_wifi_set_promiscuous(false);
+    s_sweep_mode = false;
+
+    int total = targets_sta_count();
+    io_log("dev: %d devices found\r\n", total);
+    return total;
 }

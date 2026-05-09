@@ -31,6 +31,8 @@ static const char *HELP =
     "  ls                              list APs\r\n"
     "  sniff <ap_idx> <sec>            promiscuous capture for that AP\r\n"
     "  stas                            list captured STAs\r\n"
+    "  dev scan [sec]                  passive device sweep (default 13s)\r\n"
+    "  dev ls                          list found devices\r\n"
     "  t24 <ap_idx>                    select 2.4 GHz target\r\n"
     "  t5  <ap_idx>                    select 5 GHz target\r\n"
     "  sta <sta_idx>                   select unicast STA target\r\n"
@@ -229,6 +231,21 @@ static void run_line(char *line)
     }
     if (strcasecmp(cmd, "wl") == 0) { cmd_acl(argc, argv, true);  return; }
     if (strcasecmp(cmd, "bl") == 0) { cmd_acl(argc, argv, false); return; }
+
+    if (strcasecmp(cmd, "dev") == 0) {
+        if (argc < 2) { io_log("usage: dev scan [sec] | dev ls\r\n"); return; }
+        if (strcasecmp(argv[1], "ls") == 0) {
+            targets_list_stas_machine();
+        } else if (strcasecmp(argv[1], "scan") == 0) {
+            uint32_t sec = (argc >= 3) ? (uint32_t)atoi(argv[2]) : 13;
+            targets_clear_stas();
+            sniffer_sweep(sec);
+            targets_list_stas_machine();
+        } else {
+            io_log("usage: dev scan [sec] | dev ls\r\n");
+        }
+        return;
+    }
 
     if (strcasecmp(cmd, "reset") == 0 || strcasecmp(cmd, "reboot") == 0) {
         io_log("reset: restarting chip in 200ms\r\n");

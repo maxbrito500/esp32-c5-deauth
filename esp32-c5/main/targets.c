@@ -166,6 +166,26 @@ void targets_list_stas(void)
     UNLOCK();
 }
 
+void targets_list_stas_machine(void)
+{
+    LOCK();
+    int n = s_sta_count;
+    if (n == 0) {
+        UNLOCK();
+        io_log("(no devices)\r\n");
+        return;
+    }
+    for (int i = 0; i < n; i++) {
+        const target_sta_t *s = &s_stas[i];
+        io_log("sta: %02X:%02X:%02X:%02X:%02X:%02X %d %u %02X:%02X:%02X:%02X:%02X:%02X\r\n",
+               s->mac[0], s->mac[1], s->mac[2], s->mac[3], s->mac[4], s->mac[5],
+               (int)s->rssi, (unsigned)s->channel,
+               s->bssid[0], s->bssid[1], s->bssid[2], s->bssid[3], s->bssid[4], s->bssid[5]);
+    }
+    io_log("(sta end)\r\n");
+    UNLOCK();
+}
+
 /* ── Multi-AP selection list ─────────────────────────────────────────────── */
 
 void targets_sel_toggle(uint16_t idx)
