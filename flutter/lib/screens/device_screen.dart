@@ -890,25 +890,37 @@ class _NukeTab extends StatefulWidget {
   State<_NukeTab> createState() => _NukeTabState();
 }
 
-class _NukeTabState extends State<_NukeTab> {
+class _NukeTabState extends State<_NukeTab>
+    with SingleTickerProviderStateMixin {
   final _durationCtrl = TextEditingController(text: '60');
-  Timer? _ticker;
+  Timer? _countdownTicker;
+  late AnimationController _radarCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _radarCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 30),
+    )..repeat();
+  }
 
   @override
   void dispose() {
-    _ticker?.cancel();
+    _countdownTicker?.cancel();
     _durationCtrl.dispose();
+    _radarCtrl.dispose();
     super.dispose();
   }
 
-  void _syncTicker(bool isNuking) {
-    if (isNuking && _ticker == null) {
-      _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+  void _syncCountdown(bool isNuking) {
+    if (isNuking && _countdownTicker == null) {
+      _countdownTicker = Timer.periodic(const Duration(seconds: 1), (_) {
         if (mounted) setState(() {});
       });
-    } else if (!isNuking && _ticker != null) {
-      _ticker!.cancel();
-      _ticker = null;
+    } else if (!isNuking && _countdownTicker != null) {
+      _countdownTicker!.cancel();
+      _countdownTicker = null;
     }
   }
 
@@ -935,7 +947,7 @@ class _NukeTabState extends State<_NukeTab> {
     final isOtherAttack = ctrl.attacking && !isNuking;
     final apCount = ctrl.aps.length;
 
-    _syncTicker(isNuking);
+    _syncCountdown(isNuking);
 
     Duration remaining = Duration.zero;
     if (isNuking && ctrl.nukeStartedAt != null) {
@@ -945,142 +957,351 @@ class _NukeTabState extends State<_NukeTab> {
       remaining = rem.isNegative ? Duration.zero : rem;
     }
 
-    return Padding(
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Status card
-          Card(
-            color: isNuking ? Colors.red.shade900.withAlpha(180) : null,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-              child: Row(
-                children: [
-                  Icon(
-                    isNuking ? Icons.bolt : Icons.bolt_outlined,
-                    size: 36,
-                    color: isNuking ? Colors.red.shade300 : Colors.grey,
+    final statusText = isNuking
+        ? 'NUKING · ${ctrl.nukeApCount} NETS'
+        : apCount == 0
+            ? 'NO TARGETS'
+            : '$apCount TARGETS IN RANGE';
+    final infoText = isNuking
+        ? '${_formatRemaining(remaining)} · ${_fmtPkts(ctrl.nukePkts)} frames'
+        : null;
+
+    return Column(
+      children: [
+        // Radar — fills all available vertical space
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+            child: AnimatedBuilder(
+              animation: _radarCtrl,
+              builder: (_, _) => CustomPaint(
+                painter: _RadarPainter(
+                  sweepAngle: _radarCtrl.value * 2 * math.pi,
+                  aps: ctrl.aps,
+                  isNuking: isNuking,
+                  statusText: statusText,
+                  infoText: infoText,
+                ),
+                child: const SizedBox.expand(),
+              ),
+            ),
+          ),
+        ),
+
+        // Conflict warning
+        if (isOtherAttack)
+          Container(
+            color: Colors.orange.shade900.withAlpha(120),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            child: const Text(
+              'Stop the current attack before launching Nuke.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12),
+            ),
+          ),
+
+        // Controls row
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
+          child: Row(
+            children: [
+              if (!isNuking) ...[
+                SizedBox(
+                  width: 110,
+                  child: TextField(
+                    controller: _durationCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Seconds',
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                    ),
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                   ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          isNuking ? 'NUKING' : 'IDLE',
-                          style: TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                            color: isNuking ? Colors.red.shade300 : Colors.grey,
+                ),
+                const SizedBox(width: 12),
+              ],
+              Expanded(
+                child: SizedBox(
+                  height: 48,
+                  child: isNuking
+                      ? ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.red.shade800),
+                          onPressed: ctrl.stopAttack,
+                          icon: const Icon(Icons.stop, size: 20),
+                          label: const Text('Stop Nuke'),
+                        )
+                      : ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor:
+                                (apCount == 0 || isOtherAttack)
+                                    ? null
+                                    : Colors.red.shade700,
                           ),
+                          onPressed: (apCount == 0 || isOtherAttack)
+                              ? null
+                              : () {
+                                  final secs =
+                                      int.tryParse(_durationCtrl.text) ?? 60;
+                                  ctrl.nuke(secs);
+                                },
+                          icon: const Icon(Icons.bolt, size: 20),
+                          label: const Text('Fire Nuke'),
                         ),
-                        if (isNuking) ...[
-                          const SizedBox(height: 4),
-                          Text(
-                            '${ctrl.nukeApCount} network${ctrl.nukeApCount == 1 ? '' : 's'} — all clients',
-                            style: TextStyle(color: Colors.red.shade200),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            'Stops in ${_formatRemaining(remaining)}',
-                            style: TextStyle(
-                              color: remaining.inSeconds <= 10
-                                  ? Colors.orange.shade300
-                                  : Colors.grey.shade400,
-                              fontFeatures: const [FontFeature.tabularFigures()],
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            '${_fmtPkts(ctrl.nukePkts)} deauth frames sent',
-                            style: TextStyle(
-                              color: Colors.red.shade100,
-                              fontFeatures: const [FontFeature.tabularFigures()],
-                            ),
-                          ),
-                        ] else
-                          Text(
-                            '$apCount network${apCount == 1 ? '' : 's'} in range',
-                            style: const TextStyle(color: Colors.grey),
-                          ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 20),
-
-          if (apCount == 0 && !isNuking)
-            Card(
-              color: Colors.amber.shade800.withAlpha(60),
-              child: const Padding(
-                padding: EdgeInsets.all(14),
-                child: Text(
-                  'No networks scanned yet.\nGo to Networks tab and tap Scan first.',
-                  textAlign: TextAlign.center,
                 ),
               ),
-            ),
-
-          if (isOtherAttack)
-            Card(
-              color: Colors.orange.shade800.withAlpha(60),
-              child: const Padding(
-                padding: EdgeInsets.all(14),
-                child: Text(
-                  'Another attack is running.\nStop it before launching Nuke.',
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            ),
-
-          const Spacer(),
-
-          if (!isNuking)
-            TextField(
-              controller: _durationCtrl,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Duration (seconds)',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.timer),
-              ),
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-            ),
-
-          const SizedBox(height: 16),
-
-          SizedBox(
-            height: 56,
-            child: isNuking
-                ? ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.red.shade800),
-                    onPressed: ctrl.stopAttack,
-                    icon: const Icon(Icons.stop, size: 22),
-                    label: const Text('Stop', style: TextStyle(fontSize: 17)),
-                  )
-                : ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: (apCount == 0 || isOtherAttack)
-                          ? null
-                          : Colors.red.shade700,
-                    ),
-                    onPressed: (apCount == 0 || isOtherAttack)
-                        ? null
-                        : () {
-                            final secs = int.tryParse(_durationCtrl.text) ?? 60;
-                            ctrl.nuke(secs);
-                          },
-                    icon: const Icon(Icons.bolt, size: 22),
-                    label: const Text('Fire Nuke', style: TextStyle(fontSize: 17)),
-                  ),
+            ],
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
+}
+
+// ─── Military radar CustomPainter ────────────────────────────────────────────
+
+class _RadarPainter extends CustomPainter {
+  _RadarPainter({
+    required this.sweepAngle,
+    required this.aps,
+    required this.isNuking,
+    required this.statusText,
+    this.infoText,
+  });
+
+  final double sweepAngle;
+  final List<ApEntry> aps;
+  final bool isNuking;
+  final String statusText;
+  final String? infoText;
+
+  static const _bg       = Color(0xFF010D01);
+  static const _ring     = Color(0xFF0C3A0C);
+  static const _phosphor = Color(0xFF39FF14);
+  static const _dimGreen = Color(0xFF1B5C1B);
+  static const _targetC  = Color(0xFFFF4800);
+  static const _maxM     = 50.0; // outer ring = 50 m
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+    final center = Offset(cx, cy);
+    final r = math.min(cx, cy) - 2;
+
+    // Clip everything inside the circle
+    canvas.save();
+    canvas.clipPath(
+        Path()..addOval(Rect.fromCircle(center: center, radius: r)));
+
+    // Background
+    canvas.drawPaint(Paint()..color = _bg);
+
+    // Concentric range rings
+    final ringPaint = Paint()
+      ..color = _ring
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.7;
+    for (int i = 1; i <= 4; i++) {
+      canvas.drawCircle(center, r * i / 4, ringPaint);
+    }
+
+    // Cross-hairs (horizontal, vertical, diagonals)
+    final xhPaint = Paint()
+      ..color = _ring
+      ..strokeWidth = 0.4;
+    canvas.drawLine(Offset(cx - r, cy), Offset(cx + r, cy), xhPaint);
+    canvas.drawLine(Offset(cx, cy - r), Offset(cx, cy + r), xhPaint);
+    final diag = r / math.sqrt2;
+    canvas.drawLine(
+        Offset(cx - diag, cy - diag), Offset(cx + diag, cy + diag), xhPaint);
+    canvas.drawLine(
+        Offset(cx + diag, cy - diag), Offset(cx - diag, cy + diag), xhPaint);
+
+    // Azimuth tick marks every 30°
+    final tickPaint = Paint()
+      ..color = _dimGreen
+      ..strokeWidth = 0.9;
+    for (int i = 0; i < 12; i++) {
+      final a = i * math.pi / 6;
+      canvas.drawLine(
+        Offset(cx + (r - 8) * math.cos(a), cy + (r - 8) * math.sin(a)),
+        Offset(cx + r * math.cos(a), cy + r * math.sin(a)),
+        tickPaint,
+      );
+    }
+
+    // Phosphor sweep trail
+    const trailSpan = math.pi * 0.65; // ~117° of fading trail
+    final trailRect = Rect.fromCircle(center: center, radius: r);
+    final trailPath = Path()
+      ..moveTo(cx, cy)
+      ..arcTo(trailRect, sweepAngle - trailSpan, trailSpan, false)
+      ..close();
+    canvas.drawPath(
+      trailPath,
+      Paint()
+        ..shader = SweepGradient(
+          startAngle: sweepAngle - trailSpan,
+          endAngle: sweepAngle,
+          colors: [Colors.transparent, _phosphor.withValues(alpha: 0.22)],
+          tileMode: TileMode.clamp,
+        ).createShader(trailRect),
+    );
+
+    // AP dots with ping glow
+    for (final ap in aps) {
+      _paintAp(canvas, ap, center, r);
+    }
+
+    // Sweep line (on top of everything)
+    canvas.drawLine(
+      center,
+      Offset(cx + r * math.cos(sweepAngle), cy + r * math.sin(sweepAngle)),
+      Paint()
+        ..color = _phosphor.withValues(alpha: 0.92)
+        ..strokeWidth = 1.5,
+    );
+
+    // Bullseye at center (the deauther)
+    canvas.drawCircle(center, 2.5, Paint()..color = _phosphor);
+    canvas.drawCircle(
+        center,
+        6,
+        Paint()
+          ..color = _phosphor.withValues(alpha: 0.35)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.0);
+
+    canvas.restore(); // end clip
+
+    // Range labels and status text are drawn outside the clip
+    _paintRangeLabels(canvas, center, r);
+    _paintStatus(canvas, center, r);
+  }
+
+  void _paintAp(Canvas canvas, ApEntry ap, Offset center, double maxR) {
+    final angle = _apAngle(ap);
+    final dotR  = _apRadius(ap.rssi, maxR);
+    final pos   = Offset(
+      center.dx + dotR * math.cos(angle),
+      center.dy + dotR * math.sin(angle),
+    );
+
+    // age: how many seconds ago the sweep last passed this angle (0..30)
+    final age  = _pingAge(angle);
+    final glow = math.max(0.0, 1.0 - age / 3.2);
+
+    final col = isNuking ? _targetC : _phosphor;
+    final dim = isNuking ? _targetC.withValues(alpha: 0.32) : _dimGreen;
+
+    // Glow halo when freshly swept
+    if (glow > 0.04) {
+      canvas.drawCircle(
+        pos,
+        10 * glow,
+        Paint()
+          ..color = col.withValues(alpha: 0.18 * glow)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5),
+      );
+    }
+
+    // Core dot
+    canvas.drawCircle(pos, 2.5,
+        Paint()..color = glow > 0.04 ? col : dim);
+
+    // SSID label — always present, brighter on ping
+    final label =
+        ap.ssid.length > 14 ? '${ap.ssid.substring(0, 12)}..' : ap.ssid;
+    final tp = TextPainter(
+      text: TextSpan(
+        text: label,
+        style: TextStyle(
+          color: (glow > 0.04 ? col : dim)
+              .withValues(alpha: glow > 0.04 ? 0.6 + 0.4 * glow : 0.38),
+          fontSize: 7.5,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: 90);
+    tp.paint(canvas, Offset(pos.dx + 5, pos.dy - tp.height / 2));
+  }
+
+  void _paintRangeLabels(Canvas canvas, Offset center, double r) {
+    const labels = ['12m', '25m', '37m', '50m'];
+    for (int i = 0; i < 4; i++) {
+      final tp = TextPainter(
+        text: TextSpan(
+          text: labels[i],
+          style: const TextStyle(color: _dimGreen, fontSize: 7),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas, Offset(
+        center.dx + 3,
+        center.dy - (i + 1) / 4.0 * r - tp.height / 2,
+      ));
+    }
+  }
+
+  void _paintStatus(Canvas canvas, Offset center, double r) {
+    final left = center.dx - r + 10;
+    final top  = center.dy - r + 10;
+
+    final primaryColor =
+        isNuking ? _targetC.withValues(alpha: 0.9) : _phosphor.withValues(alpha: 0.72);
+
+    final tp1 = TextPainter(
+      text: TextSpan(
+        text: statusText,
+        style: TextStyle(
+          color: primaryColor,
+          fontSize: 10,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 1.4,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp1.paint(canvas, Offset(left, top));
+
+    if (infoText != null) {
+      final tp2 = TextPainter(
+        text: TextSpan(
+          text: infoText,
+          style: TextStyle(
+              color: _phosphor.withValues(alpha: 0.55), fontSize: 8.5),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp2.paint(canvas, Offset(left, top + tp1.height + 3));
+    }
+  }
+
+  // Stable angle for an AP derived from the last 3 bytes of its BSSID
+  static double _apAngle(ApEntry ap) {
+    final b = ap.bssid.split(':');
+    final v = int.parse(b[3], radix: 16) << 16 |
+              int.parse(b[4], radix: 16) << 8  |
+              int.parse(b[5], radix: 16);
+    return (v / 16777216.0) * 2 * math.pi;
+  }
+
+  // Radial distance on the radar canvas based on RSSI
+  static double _apRadius(int rssi, double maxR) {
+    // Log-distance: txPower=-45 dBm, n=2.7 → exponent divisor ≈ 27
+    final m = math.pow(10.0, (-45.0 - rssi) / 27.0).toDouble();
+    return (m.clamp(1.0, _maxM) / _maxM) * maxR;
+  }
+
+  // Seconds since the sweep last passed this angle (0 … 30 s)
+  double _pingAge(double dotAngle) {
+    final sa = ((sweepAngle % (2 * math.pi)) + 2 * math.pi) % (2 * math.pi);
+    final da = ((dotAngle   % (2 * math.pi)) + 2 * math.pi) % (2 * math.pi);
+    return ((sa - da + 2 * math.pi) % (2 * math.pi)) / (2 * math.pi) * 30.0;
+  }
+
+  @override
+  bool shouldRepaint(_RadarPainter old) => true;
 }
