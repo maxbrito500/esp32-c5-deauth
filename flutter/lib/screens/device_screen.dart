@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -592,12 +594,35 @@ class _NukeTab extends StatefulWidget {
 }
 
 class _NukeTabState extends State<_NukeTab> {
-  final _durationCtrl = TextEditingController(text: '30');
+  final _durationCtrl = TextEditingController(text: '60');
+  Timer? _ticker;
 
   @override
   void dispose() {
+    _ticker?.cancel();
     _durationCtrl.dispose();
     super.dispose();
+  }
+
+  void _syncTicker(bool isNuking) {
+    if (isNuking && _ticker == null) {
+      _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (mounted) setState(() {});
+      });
+    } else if (!isNuking && _ticker != null) {
+      _ticker!.cancel();
+      _ticker = null;
+    }
+  }
+
+  String _formatRemaining(Duration d) {
+    if (d <= Duration.zero) return '0s';
+    final h = d.inHours;
+    final m = d.inMinutes.remainder(60);
+    final s = d.inSeconds.remainder(60);
+    if (h > 0) return '${h}h ${m}m';
+    if (m > 0) return '${m}m ${s}s';
+    return '${s}s';
   }
 
   @override
@@ -606,6 +631,16 @@ class _NukeTabState extends State<_NukeTab> {
     final isNuking = ctrl.attacking && ctrl.attackMode == 'nuke';
     final isOtherAttack = ctrl.attacking && !isNuking;
     final apCount = ctrl.aps.length;
+
+    _syncTicker(isNuking);
+
+    Duration remaining = Duration.zero;
+    if (isNuking && ctrl.nukeStartedAt != null) {
+      final elapsed = DateTime.now().difference(ctrl.nukeStartedAt!);
+      final total = Duration(seconds: ctrl.nukeDurationSecs);
+      final rem = total - elapsed;
+      remaining = rem.isNegative ? Duration.zero : rem;
+    }
 
     return Padding(
       padding: const EdgeInsets.all(24),
@@ -625,22 +660,41 @@ class _NukeTabState extends State<_NukeTab> {
                     color: isNuking ? Colors.red.shade300 : Colors.grey,
                   ),
                   const SizedBox(width: 16),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        isNuking ? 'NUKING' : 'IDLE',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          color: isNuking ? Colors.red.shade300 : Colors.grey,
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          isNuking ? 'NUKING' : 'IDLE',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                            color: isNuking ? Colors.red.shade300 : Colors.grey,
+                          ),
                         ),
-                      ),
-                      Text(
-                        '$apCount network${apCount == 1 ? '' : 's'} in range',
-                        style: const TextStyle(color: Colors.grey),
-                      ),
-                    ],
+                        if (isNuking) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            '${ctrl.nukeApCount} network${ctrl.nukeApCount == 1 ? '' : 's'} — all clients',
+                            style: TextStyle(color: Colors.red.shade200),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            'Stops in ${_formatRemaining(remaining)}',
+                            style: TextStyle(
+                              color: remaining.inSeconds <= 10
+                                  ? Colors.orange.shade300
+                                  : Colors.grey.shade400,
+                              fontFeatures: const [FontFeature.tabularFigures()],
+                            ),
+                          ),
+                        ] else
+                          Text(
+                            '$apCount network${apCount == 1 ? '' : 's'} in range',
+                            style: const TextStyle(color: Colors.grey),
+                          ),
+                      ],
+                    ),
                   ),
                 ],
               ),
@@ -707,7 +761,7 @@ class _NukeTabState extends State<_NukeTab> {
                     onPressed: (apCount == 0 || isOtherAttack)
                         ? null
                         : () {
-                            final secs = int.tryParse(_durationCtrl.text) ?? 30;
+                            final secs = int.tryParse(_durationCtrl.text) ?? 60;
                             ctrl.nuke(secs);
                           },
                     icon: const Icon(Icons.bolt, size: 22),

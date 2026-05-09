@@ -29,6 +29,11 @@ class DeviceController extends ChangeNotifier {
   String rawLog = '';
   DateTime? _lastScanTime;
 
+  // Nuke state
+  DateTime? nukeStartedAt;
+  int nukeDurationSecs = 0;
+  int nukeApCount = 0;
+
   bool get scanIsStale {
     if (aps.isEmpty) return true;
     if (_lastScanTime == null) return true;
@@ -46,6 +51,7 @@ class DeviceController extends ChangeNotifier {
   int? _pendingSel24;
   int? _pendingSel5;
 
+  static final _reNuke = RegExp(r'^nuke: (\d+)s\s+aps=(\d+)');
   static final _reAp = RegExp(
       r'^\s*(\d+)\s+(\d+)\s+(2\.4GHz|5GHz)\s+(-?\d+)\s+'
       r'([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+(.*?)\s*$');
@@ -169,20 +175,35 @@ class DeviceController extends ChangeNotifier {
       return;
     }
 
+    // Nuke progress
+    final nm = _reNuke.firstMatch(line);
+    if (nm != null) {
+      nukeApCount = int.parse(nm.group(2)!);
+      return;
+    }
+
     // Attack state
     if (line.startsWith('attack: start mode=')) {
       attacking = true;
       final mm = RegExp(r'mode=(\w+)').firstMatch(line);
       if (mm != null) attackMode = mm.group(1)!;
+      if (attackMode == 'nuke') {
+        nukeStartedAt = DateTime.now();
+        final dm = RegExp(r'duration=(\d+)s').firstMatch(line);
+        if (dm != null) nukeDurationSecs = int.parse(dm.group(1)!);
+        final am = RegExp(r'aps=(\d+)').firstMatch(line);
+        if (am != null) nukeApCount = int.parse(am.group(1)!);
+      }
       return;
     }
     if (line.startsWith('attack: stopped') ||
         line == 'attack: stop requested' ||
         line == 'attack: not running') {
       attacking = false;
+      nukeStartedAt = null;
       return;
     }
-    if (line.startsWith('status: idle')) { attacking = false; return; }
+    if (line.startsWith('status: idle')) { attacking = false; nukeStartedAt = null; return; }
     if (line.startsWith('status: running')) {
       attacking = true;
       final mm = RegExp(r'mode=(\w+)').firstMatch(line);
