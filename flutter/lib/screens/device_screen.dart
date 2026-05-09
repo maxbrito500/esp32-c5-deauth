@@ -1107,6 +1107,26 @@ class _RadarPainter extends CustomPainter {
     }
     maxM = (maxM * 1.25).clamp(10.0, 200.0);
 
+    // Group APs by normalized SSID so same-router networks share a neighborhood.
+    // Within each group, sort 2.4 GHz first then 5 GHz and fan by ~5° per member.
+    final Map<String, List<ApEntry>> groups = {};
+    for (final ap in aps) {
+      groups.putIfAbsent(_normSsid(ap.ssid), () => []).add(ap);
+    }
+    for (final g in groups.values) {
+      g.sort((a, b) => (a.is5ghz ? 1 : 0).compareTo(b.is5ghz ? 1 : 0));
+    }
+    const fanStep = 0.085; // ~4.9° per member
+    final Map<String, double> apAngles = {};
+    for (final entry in groups.entries) {
+      final base = _groupAngle(entry.key);
+      final members = entry.value;
+      for (int i = 0; i < members.length; i++) {
+        apAngles[members[i].bssid] =
+            base + (i - (members.length - 1) / 2.0) * fanStep;
+      }
+    }
+
     // Clip everything inside the circle
     canvas.save();
     canvas.clipPath(
@@ -1172,7 +1192,7 @@ class _RadarPainter extends CustomPainter {
     if (inputPos != null) {
       double best = 30.0;
       for (final ap in aps) {
-        final a = _apAngle(ap);
+        final a = apAngles[ap.bssid]!;
         final dr = _apRadius(ap.rssi, r, maxM);
         final d = (Offset(cx + dr * math.cos(a), cy + dr * math.sin(a)) - inputPos!).distance;
         if (d < best) { best = d; highlightBssid = ap.bssid; }
@@ -1181,7 +1201,7 @@ class _RadarPainter extends CustomPainter {
 
     // AP dots with ping glow
     for (final ap in aps) {
-      _paintAp(canvas, ap, center, r, maxM, ap.bssid == highlightBssid);
+      _paintAp(canvas, ap, apAngles[ap.bssid]!, center, r, maxM, ap.bssid == highlightBssid);
     }
 
     // Sweep line (on top of everything)
@@ -1210,9 +1230,8 @@ class _RadarPainter extends CustomPainter {
     _paintStatus(canvas, center, r);
   }
 
-  void _paintAp(Canvas canvas, ApEntry ap, Offset center, double maxR,
-      double maxM, bool highlighted) {
-    final angle = _apAngle(ap);
+  void _paintAp(Canvas canvas, ApEntry ap, double angle, Offset center,
+      double maxR, double maxM, bool highlighted) {
     final dotR  = _apRadius(ap.rssi, maxR, maxM);
     final pos   = Offset(
       center.dx + dotR * math.cos(angle),
@@ -1334,13 +1353,29 @@ class _RadarPainter extends CustomPainter {
     }
   }
 
-  // Stable angle for an AP derived from the last 3 bytes of its BSSID
-  static double _apAngle(ApEntry ap) {
-    final b = ap.bssid.split(':');
-    final v = int.parse(b[3], radix: 16) << 16 |
-              int.parse(b[4], radix: 16) << 8  |
-              int.parse(b[5], radix: 16);
-    return (v / 16777216.0) * 2 * math.pi;
+  // Strip common band/variant suffixes so same-router SSIDs share a group key.
+  // e.g. "HomeNet_5G", "HomeNet-5GHz", "HomeNet_EXT" → "HomeNet"
+  static final _suffixRe = RegExp(
+      r'[-_ ](5g(hz)?|2\.?4g(hz)?|2g(hz)?|6g(hz)?|5|2|ext(ender)?|plus|fast|iot|mesh|guest)$',
+      caseSensitive: false);
+  static String _normSsid(String ssid) {
+    String s = ssid.trim();
+    String prev;
+    do {
+      prev = s;
+      s = s.replaceAll(_suffixRe, '').trim();
+    } while (s != prev && s.length > 2);
+    return s.toLowerCase();
+  }
+
+  // Stable angle derived from the normalized SSID via FNV-1a hash
+  static double _groupAngle(String normSsid) {
+    int h = 2166136261;
+    for (final c in normSsid.codeUnits) {
+      h ^= c;
+      h = (h * 16777619) & 0xFFFFFFFF;
+    }
+    return (h / 0xFFFFFFFF) * 2 * math.pi;
   }
 
   // Radial distance on the radar canvas based on RSSI
