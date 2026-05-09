@@ -895,6 +895,7 @@ class _NukeTabState extends State<_NukeTab>
   final _durationCtrl = TextEditingController(text: '60');
   Timer? _countdownTicker;
   late AnimationController _radarCtrl;
+  Offset? _inputPos;
 
   @override
   void initState() {
@@ -972,17 +973,25 @@ class _NukeTabState extends State<_NukeTab>
         Expanded(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
-            child: AnimatedBuilder(
-              animation: _radarCtrl,
-              builder: (_, _) => CustomPaint(
-                painter: _RadarPainter(
-                  sweepAngle: _radarCtrl.value * 2 * math.pi,
-                  aps: ctrl.aps,
-                  isNuking: isNuking,
-                  statusText: statusText,
-                  infoText: infoText,
+            child: MouseRegion(
+              onHover:  (e) => setState(() => _inputPos = e.localPosition),
+              onExit:   (_) => setState(() => _inputPos = null),
+              child: GestureDetector(
+                onTapDown: (e) => setState(() => _inputPos = e.localPosition),
+                child: AnimatedBuilder(
+                  animation: _radarCtrl,
+                  builder: (_, _) => CustomPaint(
+                    painter: _RadarPainter(
+                      sweepAngle: _radarCtrl.value * 2 * math.pi,
+                      aps: ctrl.aps,
+                      isNuking: isNuking,
+                      statusText: statusText,
+                      infoText: infoText,
+                      inputPos: _inputPos,
+                    ),
+                    child: const SizedBox.expand(),
+                  ),
                 ),
-                child: const SizedBox.expand(),
               ),
             ),
           ),
@@ -1068,6 +1077,7 @@ class _RadarPainter extends CustomPainter {
     required this.isNuking,
     required this.statusText,
     this.infoText,
+    this.inputPos,
   });
 
   final double sweepAngle;
@@ -1075,6 +1085,7 @@ class _RadarPainter extends CustomPainter {
   final bool isNuking;
   final String statusText;
   final String? infoText;
+  final Offset? inputPos;
 
   static const _bg       = Color(0xFF010D01);
   static const _ring     = Color(0xFF0C3A0C);
@@ -1156,9 +1167,21 @@ class _RadarPainter extends CustomPainter {
         ).createShader(trailRect),
     );
 
+    // Find nearest AP to cursor/tap for highlight (hit radius 30px)
+    String? highlightBssid;
+    if (inputPos != null) {
+      double best = 30.0;
+      for (final ap in aps) {
+        final a = _apAngle(ap);
+        final dr = _apRadius(ap.rssi, r, maxM);
+        final d = (Offset(cx + dr * math.cos(a), cy + dr * math.sin(a)) - inputPos!).distance;
+        if (d < best) { best = d; highlightBssid = ap.bssid; }
+      }
+    }
+
     // AP dots with ping glow
     for (final ap in aps) {
-      _paintAp(canvas, ap, center, r, maxM);
+      _paintAp(canvas, ap, center, r, maxM, ap.bssid == highlightBssid);
     }
 
     // Sweep line (on top of everything)
@@ -1187,7 +1210,8 @@ class _RadarPainter extends CustomPainter {
     _paintStatus(canvas, center, r);
   }
 
-  void _paintAp(Canvas canvas, ApEntry ap, Offset center, double maxR, double maxM) {
+  void _paintAp(Canvas canvas, ApEntry ap, Offset center, double maxR,
+      double maxM, bool highlighted) {
     final angle = _apAngle(ap);
     final dotR  = _apRadius(ap.rssi, maxR, maxM);
     final pos   = Offset(
@@ -1195,14 +1219,23 @@ class _RadarPainter extends CustomPainter {
       center.dy + dotR * math.sin(angle),
     );
 
-    // age: how many seconds ago the sweep last passed this angle (0..30)
     final age  = _pingAge(angle);
     final glow = math.max(0.0, 1.0 - age / 3.2);
 
     final col = isNuking ? _targetC : _phosphor;
     final dim = isNuking ? _targetC.withValues(alpha: 0.32) : _dimGreen;
 
-    // Glow halo when freshly swept
+    // Highlight halo (hover / tap)
+    if (highlighted) {
+      canvas.drawCircle(
+        pos, 16,
+        Paint()
+          ..color = col.withValues(alpha: 0.22)
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8),
+      );
+    }
+
+    // Ping glow halo
     if (glow > 0.04) {
       canvas.drawCircle(
         pos,
@@ -1213,26 +1246,36 @@ class _RadarPainter extends CustomPainter {
       );
     }
 
-    // Core dot
-    canvas.drawCircle(pos, 2.5,
-        Paint()..color = glow > 0.04 ? col : dim);
+    // Core dot — larger when highlighted
+    canvas.drawCircle(pos, highlighted ? 4.5 : 2.5,
+        Paint()..color = highlighted ? col : (glow > 0.04 ? col : dim));
 
-    // SSID label — always present, brighter on ping
-    final label =
-        ap.ssid.length > 18 ? '${ap.ssid.substring(0, 16)}..' : ap.ssid;
+    // Label: "SSID · dist" — bigger and fully bright when highlighted
+    final dist   = _fmtDist(ap.rssi);
+    final ssid   = ap.ssid.length > 18 ? '${ap.ssid.substring(0, 16)}..' : ap.ssid;
+    final label  = '$ssid · $dist';
+    final fSize  = highlighted ? 14.0 : 11.0;
+    final fAlpha = highlighted ? 1.0 : (glow > 0.04 ? 0.92 + 0.08 * glow : 0.72);
     final tp = TextPainter(
       text: TextSpan(
         text: label,
         style: TextStyle(
-          color: (glow > 0.04 ? col : dim)
-              .withValues(alpha: glow > 0.04 ? 0.92 + 0.08 * glow : 0.72),
-          fontSize: 11,
-          fontWeight: FontWeight.w600,
+          color: (highlighted ? col : (glow > 0.04 ? col : dim))
+              .withValues(alpha: fAlpha),
+          fontSize: fSize,
+          fontWeight: highlighted ? FontWeight.bold : FontWeight.w600,
         ),
       ),
       textDirection: TextDirection.ltr,
-    )..layout(maxWidth: 130);
-    tp.paint(canvas, Offset(pos.dx + 5, pos.dy - tp.height / 2));
+    )..layout(maxWidth: 160);
+    tp.paint(canvas, Offset(pos.dx + 6, pos.dy - tp.height / 2));
+  }
+
+  static String _fmtDist(int rssi) {
+    final m = math.pow(10.0, (-45.0 - rssi) / 27.0).toDouble();
+    if (m < 1.0) return '<1m';
+    if (m < 10.0) return '${m.toStringAsFixed(1)}m';
+    return '${m.round()}m';
   }
 
   void _paintRangeLabels(Canvas canvas, Offset center, double r, double maxM) {
