@@ -30,9 +30,6 @@ class _DeviceView extends StatefulWidget {
   State<_DeviceView> createState() => _DeviceViewState();
 }
 
-// Tab indices
-const _kConsoleTab = 3;
-const _kNukeTab = 4;
 
 class _DeviceViewState extends State<_DeviceView>
     with SingleTickerProviderStateMixin {
@@ -41,7 +38,7 @@ class _DeviceViewState extends State<_DeviceView>
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 5, vsync: this);
+    _tabs = TabController(length: 2, vsync: this);
   }
 
   @override
@@ -101,20 +98,30 @@ class _DeviceViewState extends State<_DeviceView>
             PopupMenuButton<String>(
               icon: const Icon(Icons.menu),
               onSelected: (value) {
-                if (value == 'console') {
-                  _tabs.animateTo(_kConsoleTab);
-                } else if (value == 'nuke') {
-                  _tabs.animateTo(_kNukeTab);
-                } else if (value == 'settings') {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const SettingsScreen()),
-                  );
+                final ctrl = context.read<DeviceController>();
+                switch (value) {
+                  case 'console':
+                    Navigator.of(context).push(MaterialPageRoute(
+                        builder: (_) => _ConsoleScreen(controller: ctrl)));
+                  case 'whitelist':
+                    Navigator.of(context).push(MaterialPageRoute(
+                        builder: (_) =>
+                            _AclScreen(controller: ctrl, isWhitelist: true)));
+                  case 'blacklist':
+                    Navigator.of(context).push(MaterialPageRoute(
+                        builder: (_) =>
+                            _AclScreen(controller: ctrl, isWhitelist: false)));
+                  case 'settings':
+                    Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => const SettingsScreen()));
                 }
               },
-              itemBuilder: (_) => [
-                const PopupMenuItem(value: 'console', child: Text('Console')),
-                const PopupMenuItem(value: 'nuke', child: Text('Nuke')),
-                const PopupMenuItem(value: 'settings', child: Text('Settings')),
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'console', child: Text('Console')),
+                PopupMenuItem(value: 'whitelist', child: Text('Whitelist')),
+                PopupMenuItem(value: 'blacklist', child: Text('Blacklist')),
+                PopupMenuDivider(),
+                PopupMenuItem(value: 'settings', child: Text('Settings')),
               ],
             ),
           ],
@@ -122,9 +129,6 @@ class _DeviceViewState extends State<_DeviceView>
             controller: _tabs,
             tabs: [
               const Tab(icon: Icon(Icons.wifi), text: 'Networks'),
-              const Tab(icon: Icon(Icons.check_circle_outline), text: 'Whitelist'),
-              const Tab(icon: Icon(Icons.block), text: 'Blacklist'),
-              const Tab(icon: Icon(Icons.terminal), text: 'Console'),
               Tab(icon: Icon(Icons.bolt, color: Colors.red.shade400), text: 'Nuke'),
             ],
           ),
@@ -133,12 +137,44 @@ class _DeviceViewState extends State<_DeviceView>
           controller: _tabs,
           children: const [
             _NetworksTab(),
-            _AclTab(isWhitelist: true),
-            _AclTab(isWhitelist: false),
-            _ConsoleTab(),
             _NukeTab(),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ─── Console / ACL push-route screens ────────────────────────────────────────
+
+class _ConsoleScreen extends StatelessWidget {
+  const _ConsoleScreen({required this.controller});
+  final DeviceController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return ChangeNotifierProvider.value(
+      value: controller,
+      child: Scaffold(
+        appBar: AppBar(title: const Text('Console')),
+        body: const _ConsoleTab(),
+      ),
+    );
+  }
+}
+
+class _AclScreen extends StatelessWidget {
+  const _AclScreen({required this.controller, required this.isWhitelist});
+  final DeviceController controller;
+  final bool isWhitelist;
+
+  @override
+  Widget build(BuildContext context) {
+    return ChangeNotifierProvider.value(
+      value: controller,
+      child: Scaffold(
+        appBar: AppBar(title: Text(isWhitelist ? 'Whitelist' : 'Blacklist')),
+        body: _AclTab(isWhitelist: isWhitelist),
       ),
     );
   }
