@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -30,8 +28,9 @@ class _DeviceView extends StatefulWidget {
   State<_DeviceView> createState() => _DeviceViewState();
 }
 
-// Console tab index — used by the menu item to switch directly to it.
+// Tab indices
 const _kConsoleTab = 3;
+const _kNukeTab = 4;
 
 class _DeviceViewState extends State<_DeviceView>
     with SingleTickerProviderStateMixin {
@@ -40,92 +39,13 @@ class _DeviceViewState extends State<_DeviceView>
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 4, vsync: this);
+    _tabs = TabController(length: 5, vsync: this);
   }
 
   @override
   void dispose() {
     _tabs.dispose();
     super.dispose();
-  }
-
-  Future<void> _showNukeDialog(BuildContext context) async {
-    final ctrl = context.read<DeviceController>();
-
-    // Scan first if stale or empty, showing a progress overlay.
-    if (ctrl.scanIsStale) {
-      if (!context.mounted) return;
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (_) => const AlertDialog(
-          content: Row(children: [
-            CircularProgressIndicator(),
-            SizedBox(width: 16),
-            Text('Scanning networks…'),
-          ]),
-        ),
-      );
-      await ctrl.scanWifi();
-      // Wait for scan to finish (or 15s timeout).
-      final done = Completer<void>();
-      void listener() { if (!ctrl.scanning) done.complete(); }
-      ctrl.addListener(listener);
-      await Future.any([done.future, Future.delayed(const Duration(seconds: 15))]);
-      ctrl.removeListener(listener);
-      if (context.mounted) Navigator.of(context).pop(); // dismiss scanning dialog
-    }
-
-    if (!context.mounted) return;
-
-    final durationCtrl = TextEditingController(text: '30');
-    final apCount = ctrl.aps.length;
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Row(children: [
-          Icon(Icons.bolt, color: Colors.red.shade400),
-          const SizedBox(width: 8),
-          const Text('Nuke!'),
-        ]),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Deauths ALL $apCount networks in range simultaneously.'),
-            const SizedBox(height: 16),
-            TextField(
-              controller: durationCtrl,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Duration (seconds)',
-                border: OutlineInputBorder(),
-                isDense: true,
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.red.shade700),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Fire!'),
-          ),
-        ],
-      ),
-    );
-
-    durationCtrl.dispose();
-    if (confirmed != true || !context.mounted) return;
-
-    final secs = int.tryParse(durationCtrl.text) ?? 30;
-    await ctrl.nuke(secs);
   }
 
   Future<bool> _confirmDisconnect(BuildContext context) async {
@@ -181,35 +101,29 @@ class _DeviceViewState extends State<_DeviceView>
               onSelected: (value) {
                 if (value == 'console') {
                   _tabs.animateTo(_kConsoleTab);
+                } else if (value == 'nuke') {
+                  _tabs.animateTo(_kNukeTab);
                 } else if (value == 'settings') {
                   Navigator.of(context).push(
                     MaterialPageRoute(builder: (_) => const SettingsScreen()),
                   );
-                } else if (value == 'nuke') {
-                  _showNukeDialog(context);
                 }
               },
               itemBuilder: (_) => [
                 const PopupMenuItem(value: 'console', child: Text('Console')),
+                const PopupMenuItem(value: 'nuke', child: Text('Nuke')),
                 const PopupMenuItem(value: 'settings', child: Text('Settings')),
-                const PopupMenuDivider(),
-                PopupMenuItem(
-                  value: 'nuke',
-                  child: Text('Nuke!',
-                      style: TextStyle(
-                          color: Colors.red.shade300,
-                          fontWeight: FontWeight.bold)),
-                ),
               ],
             ),
           ],
           bottom: TabBar(
             controller: _tabs,
-            tabs: const [
-              Tab(icon: Icon(Icons.wifi), text: 'Networks'),
-              Tab(icon: Icon(Icons.check_circle_outline), text: 'Whitelist'),
-              Tab(icon: Icon(Icons.block), text: 'Blacklist'),
-              Tab(icon: Icon(Icons.terminal), text: 'Console'),
+            tabs: [
+              const Tab(icon: Icon(Icons.wifi), text: 'Networks'),
+              const Tab(icon: Icon(Icons.check_circle_outline), text: 'Whitelist'),
+              const Tab(icon: Icon(Icons.block), text: 'Blacklist'),
+              const Tab(icon: Icon(Icons.terminal), text: 'Console'),
+              Tab(icon: Icon(Icons.bolt, color: Colors.red.shade400), text: 'Nuke'),
             ],
           ),
         ),
@@ -220,6 +134,7 @@ class _DeviceViewState extends State<_DeviceView>
             _AclTab(isWhitelist: true),
             _AclTab(isWhitelist: false),
             _ConsoleTab(),
+            _NukeTab(),
           ],
         ),
       ),
@@ -663,6 +578,144 @@ class _ConsoleTabState extends State<_ConsoleTab> {
           ),
         ),
       ],
+    );
+  }
+}
+
+// ─── Nuke tab ─────────────────────────────────────────────────────────────────
+
+class _NukeTab extends StatefulWidget {
+  const _NukeTab();
+
+  @override
+  State<_NukeTab> createState() => _NukeTabState();
+}
+
+class _NukeTabState extends State<_NukeTab> {
+  final _durationCtrl = TextEditingController(text: '30');
+
+  @override
+  void dispose() {
+    _durationCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ctrl = context.watch<DeviceController>();
+    final isNuking = ctrl.attacking && ctrl.attackMode == 'nuke';
+    final isOtherAttack = ctrl.attacking && !isNuking;
+    final apCount = ctrl.aps.length;
+
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Status card
+          Card(
+            color: isNuking ? Colors.red.shade900.withAlpha(180) : null,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+              child: Row(
+                children: [
+                  Icon(
+                    isNuking ? Icons.bolt : Icons.bolt_outlined,
+                    size: 36,
+                    color: isNuking ? Colors.red.shade300 : Colors.grey,
+                  ),
+                  const SizedBox(width: 16),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        isNuking ? 'NUKING' : 'IDLE',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: isNuking ? Colors.red.shade300 : Colors.grey,
+                        ),
+                      ),
+                      Text(
+                        '$apCount network${apCount == 1 ? '' : 's'} in range',
+                        style: const TextStyle(color: Colors.grey),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+
+          if (apCount == 0 && !isNuking)
+            Card(
+              color: Colors.amber.shade800.withAlpha(60),
+              child: const Padding(
+                padding: EdgeInsets.all(14),
+                child: Text(
+                  'No networks scanned yet.\nGo to Networks tab and tap Scan first.',
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
+
+          if (isOtherAttack)
+            Card(
+              color: Colors.orange.shade800.withAlpha(60),
+              child: const Padding(
+                padding: EdgeInsets.all(14),
+                child: Text(
+                  'Another attack is running.\nStop it before launching Nuke.',
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
+
+          const Spacer(),
+
+          if (!isNuking)
+            TextField(
+              controller: _durationCtrl,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Duration (seconds)',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.timer),
+              ),
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            ),
+
+          const SizedBox(height: 16),
+
+          SizedBox(
+            height: 56,
+            child: isNuking
+                ? ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red.shade800),
+                    onPressed: ctrl.stopAttack,
+                    icon: const Icon(Icons.stop, size: 22),
+                    label: const Text('Stop', style: TextStyle(fontSize: 17)),
+                  )
+                : ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: (apCount == 0 || isOtherAttack)
+                          ? null
+                          : Colors.red.shade700,
+                    ),
+                    onPressed: (apCount == 0 || isOtherAttack)
+                        ? null
+                        : () {
+                            final secs = int.tryParse(_durationCtrl.text) ?? 30;
+                            ctrl.nuke(secs);
+                          },
+                    icon: const Icon(Icons.bolt, size: 22),
+                    label: const Text('Fire Nuke', style: TextStyle(fontSize: 17)),
+                  ),
+          ),
+        ],
+      ),
     );
   }
 }
