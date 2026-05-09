@@ -5,7 +5,7 @@
 
 void attack_init(void);
 
-/* Targeted attack — uses the currently-selected t24/t5 APs. */
+/* Targeted attack — uses the sel list; duration_seconds=0 runs until stop. */
 bool attack_start(uint32_t duration_seconds);
 
 /* Nuke — deauths every AP in the scan list with mixed mode. */

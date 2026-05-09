@@ -45,8 +45,17 @@ int    targets_get_sta(uint16_t idx, target_sta_t *out);
 int    targets_sta_count(void);
 void   targets_list_stas(void);
 
-/* Selected attack targets. */
-int  targets_select_24(uint16_t ap_idx);  /* returns 0 ok, -1 not 2.4 GHz, -2 oob */
+/* Multi-AP selection list (replaces the single t24/t5 slots). */
+#define TARGETS_MAX_SEL 16
+void targets_sel_toggle(uint16_t idx);       /* add or remove from list */
+void targets_sel_clear(void);
+bool targets_sel_contains(uint16_t idx);
+int  targets_sel_count(void);
+int  targets_get_sel_ap(int n, target_ap_t *out); /* nth selected AP */
+void targets_list_sel(void);                 /* prints "sel: i j k\r\n" */
+
+/* Legacy single-target API (kept for backwards compat with sniff/sta). */
+int  targets_select_24(uint16_t ap_idx);
 int  targets_select_5(uint16_t ap_idx);
 int  targets_select_sta(uint16_t sta_idx);
 void targets_clear_selection(void);

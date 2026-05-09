@@ -170,7 +170,28 @@ static void run_line(char *line)
     }
     if (strcasecmp(cmd, "clear") == 0) {
         targets_clear_selection();
+        targets_sel_clear();
         io_log("clear: selection reset\r\n");
+        return;
+    }
+    if (strcasecmp(cmd, "sel") == 0) {
+        if (argc < 2 || strcasecmp(argv[1], "ls") == 0) {
+            targets_list_sel();
+            return;
+        }
+        if (strcasecmp(argv[1], "clear") == 0) {
+            targets_sel_clear();
+            io_log("sel: cleared\r\n");
+            return;
+        }
+        int idx = atoi(argv[1]);
+        if (idx < 0 || idx >= targets_ap_count()) {
+            io_log("sel: bad index\r\n");
+            return;
+        }
+        targets_sel_toggle((uint16_t)idx);
+        io_log("sel: %d %s\r\n", idx,
+               targets_sel_contains((uint16_t)idx) ? "on" : "off");
         return;
     }
     if (strcasecmp(cmd, "mode") == 0) {
@@ -188,8 +209,8 @@ static void run_line(char *line)
         return;
     }
     if (strcasecmp(cmd, "start") == 0) {
-        if (argc < 2) { io_log("usage: start <duration_sec>\r\n"); return; }
-        uint32_t d = (uint32_t)atoi(argv[1]);
+        /* duration is optional; 0 or omitted means run until stop */
+        uint32_t d = (argc >= 2) ? (uint32_t)atoi(argv[1]) : 0;
         attack_start(d);
         return;
     }

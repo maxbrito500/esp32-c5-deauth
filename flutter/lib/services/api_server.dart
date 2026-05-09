@@ -81,8 +81,7 @@ class ApiServer {
           await ctrl.scanWifi();
           _ok(req, {'ok': true});
         case 'POST /attack/start':
-          final body = jsonDecode(await _readBody(req)) as Map<String, dynamic>;
-          await ctrl.startAttack((body['secs'] as int?) ?? 30);
+          await ctrl.startAttack();
           _ok(req, {'ok': true});
         case 'POST /attack/stop':
           await ctrl.stopAttack();
@@ -113,8 +112,7 @@ class ApiServer {
         'attacking': ctrl.attacking,
         'attackMode': ctrl.attackMode,
         'scanning': ctrl.scanning,
-        'selected24': ctrl.selected24Idx,
-        'selected5': ctrl.selected5Idx,
+        'selectedIdxs': ctrl.selectedIdxs.toList(),
         'apCount': ctrl.aps.length,
       };
 

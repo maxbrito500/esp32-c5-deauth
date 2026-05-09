@@ -190,13 +190,11 @@ class _NetworksTab extends StatefulWidget {
 }
 
 class _NetworksTabState extends State<_NetworksTab> {
-  final _durationCtrl = TextEditingController(text: '30');
-  static const _modes = ['broadcast', 'unicast', 'disassoc', 'authflood', 'mixed'];
+  Timer? _ticker;
 
   @override
   void initState() {
     super.initState();
-    // Auto-scan if no networks are loaded yet — give the 'ls' response 2s to arrive first.
     Future.delayed(const Duration(seconds: 2), () {
       if (!mounted) return;
       final ctrl = context.read<DeviceController>();
@@ -206,48 +204,71 @@ class _NetworksTabState extends State<_NetworksTab> {
 
   @override
   void dispose() {
-    _durationCtrl.dispose();
+    _ticker?.cancel();
     super.dispose();
+  }
+
+  void _syncTicker(bool isAttacking) {
+    if (isAttacking && _ticker == null) {
+      _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (mounted) setState(() {});
+      });
+    } else if (!isAttacking && _ticker != null) {
+      _ticker!.cancel();
+      _ticker = null;
+    }
+  }
+
+  String _formatElapsed(Duration d) {
+    final h = d.inHours;
+    final m = d.inMinutes.remainder(60);
+    final s = d.inSeconds.remainder(60);
+    if (h > 0) return '${h}h ${m}m ${s}s';
+    if (m > 0) return '${m}m ${s}s';
+    return '${s}s';
   }
 
   @override
   Widget build(BuildContext context) {
     final ctrl = context.watch<DeviceController>();
-    final aps24 = ctrl.aps.where((a) => !a.is5ghz).toList();
-    final aps5 = ctrl.aps.where((a) => a.is5ghz).toList();
+    final isAttacking = ctrl.attacking && ctrl.attackMode != 'nuke';
+
+    _syncTicker(isAttacking);
+
+    final sorted = [...ctrl.aps]..sort((a, b) {
+        final sc = a.ssid.toLowerCase().compareTo(b.ssid.toLowerCase());
+        if (sc != 0) return sc;
+        if (!a.is5ghz && b.is5ghz) return -1;
+        if (a.is5ghz && !b.is5ghz) return 1;
+        return 0;
+      });
 
     return Column(
       children: [
-        _attackBar(context, ctrl),
+        _toolbar(context, ctrl),
+        if (isAttacking) _attackStatus(ctrl),
         Expanded(
           child: ctrl.aps.isEmpty
               ? _emptyAps(ctrl)
-              : ListView(
-                  children: [
-                    if (aps24.isNotEmpty) ...[
-                      _bandHeader('2.4 GHz', Colors.teal),
-                      ...aps24.map((ap) => _apTile(context, ctrl, ap)),
-                    ],
-                    if (aps5.isNotEmpty) ...[
-                      _bandHeader('5 GHz', Colors.purple),
-                      ...aps5.map((ap) => _apTile(context, ctrl, ap)),
-                    ],
-                  ],
+              : ListView.separated(
+                  itemCount: sorted.length,
+                  separatorBuilder: (_, _) => const Divider(height: 1),
+                  itemBuilder: (_, i) => _apTile(context, ctrl, sorted[i]),
                 ),
         ),
       ],
     );
   }
 
-  Widget _attackBar(BuildContext context, DeviceController ctrl) {
+  Widget _toolbar(BuildContext context, DeviceController ctrl) {
+    final isAttacking = ctrl.attacking && ctrl.attackMode != 'nuke';
     return Container(
       color: Theme.of(context).colorScheme.surface,
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
       child: Row(
         children: [
-          // Scan button
           OutlinedButton.icon(
-            onPressed: ctrl.scanning ? null : ctrl.scanWifi,
+            onPressed: (ctrl.scanning || isAttacking) ? null : ctrl.scanWifi,
             icon: ctrl.scanning
                 ? const SizedBox(
                     width: 16,
@@ -256,57 +277,40 @@ class _NetworksTabState extends State<_NetworksTab> {
                 : const Icon(Icons.search, size: 18),
             label: Text(ctrl.scanning ? 'Scanning…' : 'Scan'),
           ),
-          const SizedBox(width: 8),
-          // Mode picker
-          Expanded(
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<String>(
-                value: _modes.contains(ctrl.attackMode) ? ctrl.attackMode : 'broadcast',
-                isExpanded: true,
-                items: _modes
-                    .map((m) => DropdownMenuItem(value: m, child: Text(m)))
-                    .toList(),
-                onChanged: ctrl.attacking
-                    ? null
-                    : (v) { if (v != null) ctrl.setMode(v); },
-              ),
+          const Spacer(),
+          if (isAttacking)
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.red.shade700),
+              onPressed: ctrl.stopAttack,
+              icon: const Icon(Icons.stop, size: 18),
+              label: const Text('Stop'),
+            )
+          else
+            ElevatedButton.icon(
+              onPressed: ctrl.selectedIdxs.isEmpty
+                  ? null
+                  : ctrl.startAttack,
+              icon: const Icon(Icons.bolt, size: 18),
+              label: const Text('Deauth'),
             ),
-          ),
-          const SizedBox(width: 8),
-          // Duration field
-          SizedBox(
-            width: 56,
-            child: TextField(
-              controller: _durationCtrl,
-              keyboardType: TextInputType.number,
-              textAlign: TextAlign.center,
-              decoration: const InputDecoration(
-                  labelText: 'sec', isDense: true, border: OutlineInputBorder()),
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-              enabled: !ctrl.attacking,
-            ),
-          ),
-          const SizedBox(width: 8),
-          // Start / Stop
-          ctrl.attacking
-              ? ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.red.shade700),
-                  onPressed: ctrl.stopAttack,
-                  icon: const Icon(Icons.stop, size: 18),
-                  label: const Text('Stop'),
-                )
-              : ElevatedButton.icon(
-                  onPressed: (ctrl.selected24Idx == null && ctrl.selected5Idx == null)
-                      ? null
-                      : () {
-                          final secs = int.tryParse(_durationCtrl.text) ?? 30;
-                          ctrl.startAttack(secs);
-                        },
-                  icon: const Icon(Icons.bolt, size: 18),
-                  label: const Text('Deauth'),
-                ),
         ],
+      ),
+    );
+  }
+
+  Widget _attackStatus(DeviceController ctrl) {
+    Duration elapsed = Duration.zero;
+    if (ctrl.attackStartedAt != null) {
+      elapsed = DateTime.now().difference(ctrl.attackStartedAt!);
+    }
+    return Container(
+      width: double.infinity,
+      color: Colors.red.shade900.withAlpha(180),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Text(
+        'Attacking ${ctrl.attackAps} network${ctrl.attackAps == 1 ? '' : 's'}'
+        '   ${_formatElapsed(elapsed)} elapsed',
+        style: TextStyle(color: Colors.red.shade200, fontSize: 13),
       ),
     );
   }
@@ -326,60 +330,34 @@ class _NetworksTabState extends State<_NetworksTab> {
     );
   }
 
-  Widget _bandHeader(String label, Color color) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-      child: Row(children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-          decoration: BoxDecoration(
-            color: color.withAlpha(50),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: color.withAlpha(150)),
-          ),
-          child: Text(label,
-              style: TextStyle(
-                  color: color,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12)),
-        ),
-      ]),
-    );
-  }
-
   Widget _apTile(BuildContext context, DeviceController ctrl, ApEntry ap) {
-    final isSelected = ap.is5ghz
-        ? ctrl.selected5Idx == ap.idx
-        : ctrl.selected24Idx == ap.idx;
-    final color = ap.is5ghz ? Colors.purple : Colors.teal;
+    final isSelected = ctrl.selectedIdxs.contains(ap.idx);
+    final bandColor = ap.is5ghz ? Colors.purple : Colors.teal;
+    final isAttacking = ctrl.attacking;
     return ListTile(
       dense: true,
-      leading: Container(
-        width: 20,
-        height: 20,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: isSelected ? color : Colors.transparent,
-          border: Border.all(color: isSelected ? color : Colors.grey, width: 2),
-        ),
+      leading: Checkbox(
+        value: isSelected,
+        activeColor: bandColor,
+        onChanged: isAttacking ? null : (_) => ctrl.toggleAp(ap.idx),
       ),
-      title: Text(
-        ap.ssid.isNotEmpty ? ap.ssid : '(hidden)',
-        style: TextStyle(
-          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+      title: Text(ap.ssid.isNotEmpty ? ap.ssid : '(hidden)'),
+      subtitle: Row(children: [
+        Container(
+          margin: const EdgeInsets.only(right: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+          decoration: BoxDecoration(
+            color: bandColor.withAlpha(40),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: bandColor.withAlpha(120)),
+          ),
+          child: Text(ap.is5ghz ? '5 GHz' : '2.4 GHz',
+              style: TextStyle(color: bandColor, fontSize: 11)),
         ),
-      ),
-      subtitle: Text('ch ${ap.channel}  ${ap.bssid}  ${ap.rssi} dBm'),
+        Text('ch ${ap.channel}   ${ap.rssi} dBm'),
+      ]),
       selected: isSelected,
-      onTap: ctrl.attacking
-          ? null
-          : () {
-              if (ap.is5ghz) {
-                ctrl.selectAp5(ap.idx);
-              } else {
-                ctrl.selectAp24(ap.idx);
-              }
-            },
+      onTap: isAttacking ? null : () => ctrl.toggleAp(ap.idx),
     );
   }
 }

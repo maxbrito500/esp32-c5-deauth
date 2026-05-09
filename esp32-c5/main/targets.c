@@ -17,6 +17,11 @@ static int          s_ap_count = 0;
 static target_sta_t s_stas[TARGETS_MAX_STAS];
 static int          s_sta_count = 0;
 
+/* Multi-AP selection list */
+static uint16_t s_sel_idxs[TARGETS_MAX_SEL];
+static int      s_sel_n = 0;
+
+/* Legacy single-target slots */
 static target_ap_t  s_sel_24;
 static bool         s_has_sel_24 = false;
 static target_ap_t  s_sel_5;
@@ -40,6 +45,9 @@ void targets_set_aps(const target_ap_t *aps, uint16_t n)
     if (n > TARGETS_MAX_APS) n = TARGETS_MAX_APS;
     s_ap_count = n;
     if (aps && n) memcpy(s_aps, aps, n * sizeof(target_ap_t));
+    /* AP indices shift on every scan — clear selection so stale indices
+     * don't silently attack the wrong networks. */
+    s_sel_n = 0;
     UNLOCK();
 }
 
@@ -157,6 +165,75 @@ void targets_list_stas(void)
     }
     UNLOCK();
 }
+
+/* ── Multi-AP selection list ─────────────────────────────────────────────── */
+
+void targets_sel_toggle(uint16_t idx)
+{
+    LOCK();
+    for (int i = 0; i < s_sel_n; i++) {
+        if (s_sel_idxs[i] == idx) {
+            s_sel_idxs[i] = s_sel_idxs[--s_sel_n];
+            UNLOCK();
+            return;
+        }
+    }
+    if (idx < (uint16_t)s_ap_count && s_sel_n < TARGETS_MAX_SEL)
+        s_sel_idxs[s_sel_n++] = idx;
+    UNLOCK();
+}
+
+void targets_sel_clear(void)
+{
+    LOCK();
+    s_sel_n = 0;
+    UNLOCK();
+}
+
+bool targets_sel_contains(uint16_t idx)
+{
+    LOCK();
+    for (int i = 0; i < s_sel_n; i++) {
+        if (s_sel_idxs[i] == idx) { UNLOCK(); return true; }
+    }
+    UNLOCK();
+    return false;
+}
+
+int targets_sel_count(void)
+{
+    LOCK();
+    int n = s_sel_n;
+    UNLOCK();
+    return n;
+}
+
+int targets_get_sel_ap(int n, target_ap_t *out)
+{
+    LOCK();
+    if (n < 0 || n >= s_sel_n) { UNLOCK(); return -1; }
+    uint16_t idx = s_sel_idxs[n];
+    int rc = (idx < (uint16_t)s_ap_count) ? (*out = s_aps[idx], 0) : -1;
+    UNLOCK();
+    return rc;
+}
+
+void targets_list_sel(void)
+{
+    LOCK();
+    int n = s_sel_n;
+    if (n == 0) {
+        UNLOCK();
+        io_log("sel: (empty)\r\n");
+        return;
+    }
+    io_log("sel:");
+    for (int i = 0; i < n; i++) io_log(" %u", (unsigned)s_sel_idxs[i]);
+    io_log("\r\n");
+    UNLOCK();
+}
+
+/* ── Legacy single-target slots ─────────────────────────────────────────── */
 
 int targets_select_24(uint16_t ap_idx)
 {

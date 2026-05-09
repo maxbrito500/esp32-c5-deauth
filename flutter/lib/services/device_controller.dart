@@ -11,6 +11,7 @@ class DeviceController extends ChangeNotifier {
     _sub = conn.incoming.listen(_onChunk);
     conn.send('status');
     conn.send('ls');
+    conn.send('sel ls');
     conn.send('wl ls');
     conn.send('bl ls');
   }
@@ -21,13 +22,16 @@ class DeviceController extends ChangeNotifier {
   List<ApEntry> aps = const [];
   List<AclEntry> whitelist = const [];
   List<AclEntry> blacklist = const [];
-  int? selected24Idx;
-  int? selected5Idx;
+  Set<int> selectedIdxs = {};
   bool attacking = false;
-  String attackMode = 'broadcast';
+  String attackMode = 'mixed';
   bool scanning = false;
   String rawLog = '';
   DateTime? _lastScanTime;
+
+  // Regular attack state
+  DateTime? attackStartedAt;
+  int attackAps = 0;
 
   // Nuke state
   DateTime? nukeStartedAt;
@@ -48,10 +52,11 @@ class DeviceController extends ChangeNotifier {
   final List<ApEntry> _tmpAps = [];
   final List<AclEntry> _tmpWl = [];
   final List<AclEntry> _tmpBl = [];
-  int? _pendingSel24;
-  int? _pendingSel5;
 
-  static final _reNuke = RegExp(r'^nuke: (\d+)s\s+aps=(\d+)');
+  static final _reNuke    = RegExp(r'^nuke: (\d+)s\s+aps=(\d+)');
+  static final _reAttack  = RegExp(r'^attack: (\d+)s\s+aps=(\d+)');
+  static final _reSelLine = RegExp(r'^sel:([ \d]*)$');
+  static final _reSelToggle = RegExp(r'^sel: (\d+) (on|off)$');
   static final _reAp = RegExp(
       r'^\s*(\d+)\s+(\d+)\s+(2\.4GHz|5GHz)\s+(-?\d+)\s+'
       r'([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})\s+(.*?)\s*$');
@@ -147,6 +152,30 @@ class DeviceController extends ChangeNotifier {
     if (_inWl) _commitWl();
     if (_inBl) _commitBl();
 
+    // Sel toggle response: "sel: 3 on" / "sel: 3 off"
+    final st = _reSelToggle.firstMatch(line);
+    if (st != null) {
+      final idx = int.parse(st.group(1)!);
+      if (st.group(2) == 'on') {
+        selectedIdxs = {...selectedIdxs, idx};
+      } else {
+        selectedIdxs = selectedIdxs.where((i) => i != idx).toSet();
+      }
+      return;
+    }
+
+    // Sel list response: "sel: 0 3 5" or "sel: (empty)"
+    final sl = _reSelLine.firstMatch(line);
+    if (sl != null) {
+      final nums = sl.group(1)!.trim().split(RegExp(r'\s+'))
+          .where((s) => s.isNotEmpty)
+          .map((s) => int.tryParse(s))
+          .whereType<int>()
+          .toSet();
+      selectedIdxs = nums;
+      return;
+    }
+
     // Scan lifecycle
     if (line == 'scan: start (dual-band)') { scanning = true; return; }
     if (line.startsWith('scan: ') &&
@@ -154,9 +183,11 @@ class DeviceController extends ChangeNotifier {
          line.startsWith('scan: no APs') ||
          line.startsWith('scan: failed'))) {
       scanning = false;
+      selectedIdxs = {};  // indices shift after each scan
       if (RegExp(r'scan: \d+ APs').hasMatch(line)) {
         _lastScanTime = DateTime.now();
         conn.send('ls');
+        conn.send('sel ls');
       }
       return;
     }
@@ -165,13 +196,10 @@ class DeviceController extends ChangeNotifier {
       return;
     }
 
-    // Target selection confirmations
-    if (line == 't24: ok') { selected24Idx = _pendingSel24; return; }
-    if (line == 't5: ok') { selected5Idx = _pendingSel5; return; }
-    if (line.startsWith('t24:') || line.startsWith('t5:')) return; // errors
+    // Legacy t24/t5 confirmation (still used by sniff workflow)
+    if (line.startsWith('t24:') || line.startsWith('t5:')) return;
     if (line == 'clear: selection reset') {
-      selected24Idx = null;
-      selected5Idx = null;
+      selectedIdxs = {};
       return;
     }
 
@@ -179,6 +207,13 @@ class DeviceController extends ChangeNotifier {
     final nm = _reNuke.firstMatch(line);
     if (nm != null) {
       nukeApCount = int.parse(nm.group(2)!);
+      return;
+    }
+
+    // Regular attack progress: "attack: 4s  aps=2  total=1234  pps=308"
+    final am = _reAttack.firstMatch(line);
+    if (am != null) {
+      attackAps = int.parse(am.group(2)!);
       return;
     }
 
@@ -191,8 +226,12 @@ class DeviceController extends ChangeNotifier {
         nukeStartedAt = DateTime.now();
         final dm = RegExp(r'duration=(\d+)s').firstMatch(line);
         if (dm != null) nukeDurationSecs = int.parse(dm.group(1)!);
-        final am = RegExp(r'aps=(\d+)').firstMatch(line);
-        if (am != null) nukeApCount = int.parse(am.group(1)!);
+        final apm = RegExp(r'aps=(\d+)').firstMatch(line);
+        if (apm != null) nukeApCount = int.parse(apm.group(1)!);
+      } else {
+        attackStartedAt = DateTime.now();
+        final apm = RegExp(r'aps=(\d+)').firstMatch(line);
+        if (apm != null) attackAps = int.parse(apm.group(1)!);
       }
       return;
     }
@@ -201,13 +240,24 @@ class DeviceController extends ChangeNotifier {
         line == 'attack: not running') {
       attacking = false;
       nukeStartedAt = null;
+      attackStartedAt = null;
       return;
     }
-    if (line.startsWith('status: idle')) { attacking = false; nukeStartedAt = null; return; }
+    if (line.startsWith('status: idle')) {
+      attacking = false;
+      nukeStartedAt = null;
+      attackStartedAt = null;
+      return;
+    }
     if (line.startsWith('status: running')) {
       attacking = true;
       final mm = RegExp(r'mode=(\w+)').firstMatch(line);
       if (mm != null) attackMode = mm.group(1)!;
+      if (attackMode != 'nuke' && attackStartedAt == null) {
+        attackStartedAt = DateTime.now();
+      }
+      final apm = RegExp(r'aps=(\d+)').firstMatch(line);
+      if (apm != null) attackAps = int.parse(apm.group(1)!);
       return;
     }
 
@@ -222,21 +272,11 @@ class DeviceController extends ChangeNotifier {
     await conn.send('scan');
   }
 
-  Future<void> selectAp24(int idx) async {
-    _pendingSel24 = idx;
-    await conn.send('t24 $idx');
-  }
-
-  Future<void> selectAp5(int idx) async {
-    _pendingSel5 = idx;
-    await conn.send('t5 $idx');
-  }
+  Future<void> toggleAp(int idx) => conn.send('sel $idx');
 
   Future<void> clearSelection() => conn.send('clear');
 
-  Future<void> setMode(String mode) => conn.send('mode $mode');
-
-  Future<void> startAttack(int secs) => conn.send('start $secs');
+  Future<void> startAttack() => conn.send('start');
 
   Future<void> stopAttack() => conn.send('stop');
 
