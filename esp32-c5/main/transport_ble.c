@@ -169,7 +169,13 @@ static void on_sync(void)
     start_advertising();
 }
 
-static void on_reset(int reason) { ESP_LOGW(TAG, "reset: %d", reason); }
+static void on_reset(int reason)
+{
+    ESP_LOGW(TAG, "reset: %d — restarting advertising in 500 ms", reason);
+    s_conn_handle = BLE_HS_CONN_HANDLE_NONE;
+    s_notify_enabled = false;
+    ble_npl_callout_reset(&s_adv_callout, ble_npl_time_ms_to_ticks32(500));
+}
 
 static void host_task(void *arg)
 {

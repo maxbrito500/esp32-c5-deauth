@@ -36,7 +36,9 @@ int wifi_ctrl_scan(void)
         .channel = 0,           /* all channels, both bands */
         .show_hidden = true,
         .scan_type = WIFI_SCAN_TYPE_ACTIVE,
-        .scan_time.active = { .min = 80, .max = 120 },
+        /* min=0 max=0 → ESP-IDF uses coexistence-aware defaults.
+         * Custom values here trigger BLE starvation when BT is active. */
+        .scan_time.active = { .min = 0, .max = 0 },
     };
 
     io_log("scan: start (dual-band)\r\n");
