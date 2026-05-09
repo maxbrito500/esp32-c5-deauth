@@ -23,6 +23,7 @@ class _ScanScreenState extends State<ScanScreen> {
   final NusClient _client = NusClient();
   StreamSubscription<List<ScanResult>>? _resultsSub;
   StreamSubscription<bool>? _scanningSub;
+  StreamSubscription<BluetoothAdapterState>? _adapterSub;
   List<ScanResult> _results = [];
   bool _scanning = false;
   bool _connecting = false;
@@ -44,6 +45,13 @@ class _ScanScreenState extends State<ScanScreen> {
         });
       }
     });
+    // Kick off a scan when BT adapter turns on (handles the case where BT was
+    // off at startup and the user enables it via the system dialog).
+    _adapterSub = FlutterBluePlus.adapterState.listen((state) {
+      if (state == BluetoothAdapterState.on && !_scanning && !_connecting && mounted) {
+        _maybeStartScan();
+      }
+    });
     _maybeStartScan();
   }
 
@@ -52,6 +60,7 @@ class _ScanScreenState extends State<ScanScreen> {
     _rescanTimer?.cancel();
     _resultsSub?.cancel();
     _scanningSub?.cancel();
+    _adapterSub?.cancel();
     _client.stopScan();
     super.dispose();
   }
@@ -64,14 +73,15 @@ class _ScanScreenState extends State<ScanScreen> {
 
   Future<bool> _ensurePermissions() async {
     if (!Platform.isAndroid) return true;
+    // BLUETOOTH_SCAN is declared with neverForLocation in the manifest,
+    // so location permission is not required on API 31+.
     final statuses = await [
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
-      Permission.locationWhenInUse,
     ].request();
     final ok = statuses.values.every((s) => s.isGranted || s.isLimited);
     if (!ok && mounted) {
-      setState(() => _error = 'Bluetooth/location permissions denied.');
+      setState(() => _error = 'Bluetooth permissions denied.');
     }
     return ok;
   }
@@ -82,7 +92,10 @@ class _ScanScreenState extends State<ScanScreen> {
     if (Platform.isAndroid) {
       try {
         await FlutterBluePlus.turnOn();
-        return true;
+        // turnOn() shows the system dialog but doesn't block until BT is on.
+        // The adapterState listener in initState will call _maybeStartScan when
+        // it actually transitions to on; bail here so we don't double-scan.
+        return false;
       } catch (_) {}
     }
     if (mounted) setState(() => _error = 'Bluetooth is off — enable it and retry.');
