@@ -1081,14 +1081,20 @@ class _RadarPainter extends CustomPainter {
   static const _phosphor = Color(0xFF39FF14);
   static const _dimGreen = Color(0xFF1B5C1B);
   static const _targetC  = Color(0xFFFF4800);
-  static const _maxM     = 50.0; // outer ring = 50 m
-
   @override
   void paint(Canvas canvas, Size size) {
     final cx = size.width / 2;
     final cy = size.height / 2;
     final center = Offset(cx, cy);
     final r = math.min(cx, cy) - 2;
+
+    // Dynamic range: farthest detected AP sits at ~80% of radar edge (25% headroom)
+    double maxM = 10.0;
+    for (final ap in aps) {
+      final m = math.pow(10.0, (-45.0 - ap.rssi) / 27.0).toDouble();
+      if (m > maxM) maxM = m;
+    }
+    maxM = (maxM * 1.25).clamp(10.0, 200.0);
 
     // Clip everything inside the circle
     canvas.save();
@@ -1152,7 +1158,7 @@ class _RadarPainter extends CustomPainter {
 
     // AP dots with ping glow
     for (final ap in aps) {
-      _paintAp(canvas, ap, center, r);
+      _paintAp(canvas, ap, center, r, maxM);
     }
 
     // Sweep line (on top of everything)
@@ -1177,13 +1183,13 @@ class _RadarPainter extends CustomPainter {
     canvas.restore(); // end clip
 
     // Range labels and status text are drawn outside the clip
-    _paintRangeLabels(canvas, center, r);
+    _paintRangeLabels(canvas, center, r, maxM);
     _paintStatus(canvas, center, r);
   }
 
-  void _paintAp(Canvas canvas, ApEntry ap, Offset center, double maxR) {
+  void _paintAp(Canvas canvas, ApEntry ap, Offset center, double maxR, double maxM) {
     final angle = _apAngle(ap);
-    final dotR  = _apRadius(ap.rssi, maxR);
+    final dotR  = _apRadius(ap.rssi, maxR, maxM);
     final pos   = Offset(
       center.dx + dotR * math.cos(angle),
       center.dy + dotR * math.sin(angle),
@@ -1213,23 +1219,29 @@ class _RadarPainter extends CustomPainter {
 
     // SSID label — always present, brighter on ping
     final label =
-        ap.ssid.length > 14 ? '${ap.ssid.substring(0, 12)}..' : ap.ssid;
+        ap.ssid.length > 18 ? '${ap.ssid.substring(0, 16)}..' : ap.ssid;
     final tp = TextPainter(
       text: TextSpan(
         text: label,
         style: TextStyle(
           color: (glow > 0.04 ? col : dim)
-              .withValues(alpha: glow > 0.04 ? 0.6 + 0.4 * glow : 0.38),
-          fontSize: 7.5,
+              .withValues(alpha: glow > 0.04 ? 0.92 + 0.08 * glow : 0.72),
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
         ),
       ),
       textDirection: TextDirection.ltr,
-    )..layout(maxWidth: 90);
+    )..layout(maxWidth: 130);
     tp.paint(canvas, Offset(pos.dx + 5, pos.dy - tp.height / 2));
   }
 
-  void _paintRangeLabels(Canvas canvas, Offset center, double r) {
-    const labels = ['12m', '25m', '37m', '50m'];
+  void _paintRangeLabels(Canvas canvas, Offset center, double r, double maxM) {
+    final labels = [
+      '${(maxM / 4).round()}m',
+      '${(maxM / 2).round()}m',
+      '${(maxM * 3 / 4).round()}m',
+      '${maxM.round()}m',
+    ];
     for (int i = 0; i < 4; i++) {
       final tp = TextPainter(
         text: TextSpan(
@@ -1289,10 +1301,10 @@ class _RadarPainter extends CustomPainter {
   }
 
   // Radial distance on the radar canvas based on RSSI
-  static double _apRadius(int rssi, double maxR) {
+  static double _apRadius(int rssi, double maxR, double maxM) {
     // Log-distance: txPower=-45 dBm, n=2.7 → exponent divisor ≈ 27
     final m = math.pow(10.0, (-45.0 - rssi) / 27.0).toDouble();
-    return (m.clamp(1.0, _maxM) / _maxM) * maxR;
+    return (m.clamp(1.0, maxM) / maxM) * maxR;
   }
 
   // Seconds since the sweep last passed this angle (0 … 30 s)
