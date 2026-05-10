@@ -15,7 +15,10 @@ jobs:
     name: ESP32-C5 firmware
     runs-on: ubuntu-latest
     container:
-      image: espressif/idf:release-v5.5
+      # Pinned to v5.5.1 to match the IDF the patched libnet80211.a was built
+      # against. The bundled symbols (g_offchan_packet_lifetime,
+      # wifi_nvs_get_low_rate_enable) only exist from 5.5.1 onwards.
+      image: espressif/idf:v5.5.1
     steps:
       - uses: actions/checkout@v4
 

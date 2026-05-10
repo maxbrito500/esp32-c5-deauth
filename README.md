@@ -23,7 +23,7 @@ profile with a simple line-buffered text protocol. See
 
 | Networks panel | Nuke demo |
 |----------------|-----------|
-| <img src="screenshots/panel1-deauth-wifi-routers.png" alt="Networks tab" width="320"> | [▶ panel2-nuke-all-routers.webm](screenshots/panel2-nuke-all-routers.webm) |
+| <img src="screenshots/panel1-deauth-wifi-routers.png" alt="Networks tab" width="320"> | <img src="screenshots/panel2-nuke-all-routers.gif" alt="Nuke radar in action" width="320"> |
 
 The Networks panel sorts scanned APs by band and signal, and lets you
 tick individual targets before pressing **Deauth**. The Nuke tab clip
