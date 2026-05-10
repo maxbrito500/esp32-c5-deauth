@@ -19,3 +19,6 @@ pubspec.lock
 __pycache__/
 *.pyc
 .DS_Store
+
+# Keep patched wifi static library — it's a build input, not output.
+!esp32-c5/patched_libnet/libnet80211.a
