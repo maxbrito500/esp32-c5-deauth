@@ -1,0 +1,185 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'      # any tag like v1.0.0, v0.2.1-rc1
+  workflow_dispatch:    # allow manual trigger from the Actions tab
+
+permissions:
+  contents: write       # needed to create the GitHub Release and upload assets
+
+jobs:
+  # ─── ESP32-C5 firmware (.bin bundle) ───────────────────────────────────────
+  firmware:
+    name: ESP32-C5 firmware
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:release-v5.5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply patched libnet80211.a
+        # The patch is required for esp_wifi_80211_tx() to accept management
+        # frames with a spoofed source address on the C5 5 GHz radio.
+        run: |
+          cp esp32-c5/patched_libnet/libnet80211.a "$IDF_PATH/components/esp_wifi/lib/esp32c5/libnet80211.a"
+
+      - name: Build firmware
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          cd esp32-c5
+          idf.py set-target esp32c5
+          idf.py build
+
+      - name: Package release bundle
+        run: |
+          mkdir -p release/firmware
+          cp esp32-c5/build/esp32c5_deauther.bin                release/firmware/
+          cp esp32-c5/build/bootloader/bootloader.bin           release/firmware/
+          cp esp32-c5/build/partition_table/partition-table.bin release/firmware/
+          cp esp32-c5/build/flash_args                          release/firmware/
+          cat > release/firmware/README.txt <<'EOF'
+          ESP32-C5 Deauther firmware
+          ==========================
+
+          Flash with esptool (any OS):
+
+            python -m esptool --chip esp32c5 -b 460800 \
+              --before default_reset --after hard_reset \
+              write_flash --flash_mode dio --flash_size 2MB --flash_freq 40m \
+              0x2000  bootloader.bin \
+              0x8000  partition-table.bin \
+              0x10000 esp32c5_deauther.bin
+
+          Or use Espressif's Web Flasher:
+            https://espressif.github.io/esptool-js/
+          EOF
+          ( cd release && zip -r esp32c5-deauther-firmware.zip firmware )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: release/esp32c5-deauther-firmware.zip
+
+  # ─── Flutter Android APK ───────────────────────────────────────────────────
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build APK (release)
+        working-directory: flutter
+        run: |
+          flutter pub get
+          flutter build apk --release --split-per-abi
+
+      - name: Stage APKs
+        run: |
+          mkdir -p release
+          cp flutter/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
+             release/deauther-android-arm64.apk
+          cp flutter/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk \
+             release/deauther-android-arm.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: release/*.apk
+
+  # ─── Flutter Linux desktop ─────────────────────────────────────────────────
+  linux:
+    name: Linux desktop
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux desktop build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build Linux release
+        working-directory: flutter
+        run: |
+          flutter config --enable-linux-desktop
+          flutter pub get
+          flutter build linux --release
+
+      - name: Package tarball
+        run: |
+          mkdir -p release
+          ( cd flutter/build/linux/x64/release/bundle \
+            && tar czf "$GITHUB_WORKSPACE/release/deauther-linux-x64.tar.gz" . )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: release/deauther-linux-x64.tar.gz
+
+  # ─── Publish GitHub Release with all artifacts ─────────────────────────────
+  release:
+    name: Publish release
+    needs: [firmware, android, linux]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Lay out release files
+        run: |
+          mkdir -p release
+          mv artifacts/firmware/esp32c5-deauther-firmware.zip release/
+          mv artifacts/android/*.apk release/
+          mv artifacts/linux/deauther-linux-x64.tar.gz release/
+          ls -la release/
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd release
+          sha256sum * > SHA256SUMS
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          body: |
+            **Downloads**
+
+            | File | What |
+            |------|------|
+            | `esp32c5-deauther-firmware.zip` | ESP32-C5 firmware bundle (bootloader + partition table + app + flash command). Flash with `esptool` or [esptool-js web flasher](https://espressif.github.io/esptool-js/). |
+            | `deauther-android-arm64.apk` | Android app for 64-bit phones (most modern devices). |
+            | `deauther-android-arm.apk` | Android app for 32-bit phones (older devices). |
+            | `deauther-linux-x64.tar.gz` | Linux desktop binary. Extract and run `./deauther`. |
+            | `SHA256SUMS` | Checksums for all of the above. |
+
+            > ⚠️ **Authorized testing only.** This software is published for
+            > defensive security research and education. Using it against
+            > networks you do not own or do not have explicit written
+            > permission to test is illegal in most jurisdictions. See the
+            > project README for the full ethical-use notice.

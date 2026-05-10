@@ -8,8 +8,9 @@
 // Public surface:
 //   - scan()              streams discovered peripherals advertising the NUS
 //   - connect(device)     hooks up TX/RX, returns Stream<String> of incoming
-//                         text and an `Sink<String> sink` to write commands
-//   - disconnect()        tear-down
+//                         text and a `send()` to write commands
+//   - NusConnection.disconnect()       graceful tear-down
+//   - NusConnection.disconnected       Future that completes when peer drops
 
 import 'dart:async';
 import 'dart:convert';
@@ -28,23 +29,46 @@ class NusConnection {
     required this.device,
     required BluetoothCharacteristic rx,
     required this.incoming,
-    required this.disconnect,
-  }) : _rx = rx;
+    required this.disconnected,
+    required Future<void> Function() doDisconnect,
+  })  : _rx = rx,
+        _doDisconnect = doDisconnect;
 
   final BluetoothDevice device;
   final BluetoothCharacteristic _rx;
+
+  /// Stream of UTF-8 decoded notifications from the TX characteristic.
+  /// Only emits NEW notifications (not the cached `lastValueStream`), so
+  /// a fresh connection never sees stale data from a previous session.
   final Stream<String> incoming;
-  final Future<void> Function() disconnect;
+
+  /// Resolves when the BLE link drops for any reason — graceful disconnect,
+  /// peer drop, RF loss. Use this to drive UI state transitions instead of
+  /// polling `device.isConnected`.
+  final Future<void> disconnected;
+
+  final Future<void> Function() _doDisconnect;
+  bool _disconnectCalled = false;
 
   /// Sends `text` to the device's RX characteristic. Adds a trailing newline
-  /// if missing (the firmware CLI is line-buffered).
+  /// if missing (the firmware CLI is line-buffered). Silently no-ops if the
+  /// device has dropped — callers don't need to wrap each call.
   Future<void> send(String text) async {
+    if (!device.isConnected) return;
     if (!text.endsWith('\n')) text = '$text\n';
     final bytes = utf8.encode(text);
-    // Try write-without-response first (lower latency for short commands);
-    // fall back to write-with-response if the characteristic doesn't accept it.
     final wnrSupported = _rx.properties.writeWithoutResponse;
-    await _rx.write(bytes, withoutResponse: wnrSupported);
+    try {
+      await _rx.write(bytes, withoutResponse: wnrSupported);
+    } on FlutterBluePlusException catch (_) {
+      // Device disconnected mid-write — disconnected future will fire shortly.
+    }
+  }
+
+  Future<void> disconnect() async {
+    if (_disconnectCalled) return;
+    _disconnectCalled = true;
+    await _doDisconnect();
   }
 }
 
@@ -61,10 +85,6 @@ class NusClient {
       final filtered = results.where(_looksLikeDevice).toList();
       if (!controller.isClosed) controller.add(filtered);
     });
-    // On Android, filter by service UUID for efficiency. On Linux/macOS/
-    // Windows, BlueZ and CoreBluetooth only match UUIDs in the primary
-    // advertisement — our NUS UUID is in the scan response to stay within
-    // the 31-byte limit, so the filter would silently drop the device.
     if (Platform.isAndroid) {
       FlutterBluePlus.startScan(
         timeout: timeout,
@@ -81,7 +101,7 @@ class NusClient {
   }
 
   Future<void> stopScan() async {
-    await FlutterBluePlus.stopScan();
+    try { await FlutterBluePlus.stopScan(); } catch (_) {}
     await _scanSub?.cancel();
     _scanSub = null;
   }
@@ -97,17 +117,38 @@ class NusClient {
   }
 
   /// Connect, discover services, subscribe to TX notifications, return a
-  /// [NusConnection] that exposes the bidirectional channel.
+  /// [NusConnection] exposing the bidirectional channel.
+  ///
+  /// Safe to call against the same `device` repeatedly — any prior link is
+  /// torn down and the GATT cache invalidated (Android) before re-opening.
   Future<NusConnection> connect(BluetoothDevice device) async {
     await stopScan();
-    await device.connect(timeout: const Duration(seconds: 10), autoConnect: false);
 
-    // Try to bump MTU — bigger notifications mean fewer per-message
-    // fragments. The device requested 247 in the firmware. Some platforms
-    // ignore this; that's fine.
+    // If the platform still thinks we're connected from a prior session,
+    // tear it down first. flutter_blue_plus will otherwise return immediately
+    // from connect() with a stale handle and service discovery will fail.
+    if (device.isConnected) {
+      try { await device.disconnect(); } catch (_) {}
+      await _waitForState(device, BluetoothConnectionState.disconnected,
+          const Duration(seconds: 3));
+    }
+
+    // Android caches GATT services per-device. If the firmware was rebuilt
+    // (handles renumbered) the cache is stale and discoverServices returns
+    // garbage. Force-clear before connecting.
+    if (Platform.isAndroid) {
+      try { await device.clearGattCache(); } catch (_) {}
+    }
+
+    await device.connect(timeout: const Duration(seconds: 12), autoConnect: false);
+    await _waitForState(device, BluetoothConnectionState.connected,
+        const Duration(seconds: 12));
+
+    // Bigger MTU = fewer notification fragments. The firmware requested 247.
+    // Some platforms (iOS / desktop) ignore this — that's fine.
     try {
       await device.requestMtu(247);
-    } catch (_) {/* not supported on iOS / desktop */}
+    } catch (_) {}
 
     final services = await device.discoverServices();
     final svc = services.firstWhere(
@@ -126,8 +167,11 @@ class NusClient {
 
     await tx.setNotifyValue(true);
 
-    // Decode incoming bytes as UTF-8 text. The firmware sends raw log lines.
-    final incoming = tx.lastValueStream.map((bytes) {
+    // CRITICAL: use onValueReceived (new notifications only), NOT
+    // lastValueStream (which replays the cached last value at subscribe time
+    // and would inject a stale chunk from the previous session into the
+    // parser on every reconnect).
+    final incoming = tx.onValueReceived.map((bytes) {
       try {
         return utf8.decode(bytes, allowMalformed: true);
       } catch (_) {
@@ -135,16 +179,47 @@ class NusClient {
       }
     });
 
-    Future<void> disconnect() async {
+    // Resolve `disconnected` when the device transitions to disconnected,
+    // regardless of who initiated it.
+    final disconnectedCompleter = Completer<void>();
+    late StreamSubscription<BluetoothConnectionState> stateSub;
+    stateSub = device.connectionState.listen((s) {
+      if (s == BluetoothConnectionState.disconnected
+          && !disconnectedCompleter.isCompleted) {
+        disconnectedCompleter.complete();
+        stateSub.cancel();
+      }
+    });
+
+    Future<void> doDisconnect() async {
       try { await tx.setNotifyValue(false); } catch (_) {}
       try { await device.disconnect(); } catch (_) {}
+      // Wait for the platform to confirm the disconnect so the next
+      // connect() attempt starts from a clean slate.
+      try {
+        await _waitForState(device, BluetoothConnectionState.disconnected,
+            const Duration(seconds: 3));
+      } catch (_) {}
+      try { await stateSub.cancel(); } catch (_) {}
     }
 
     return NusConnection._(
       device: device,
       rx: rx,
       incoming: incoming,
-      disconnect: disconnect,
+      disconnected: disconnectedCompleter.future,
+      doDisconnect: doDisconnect,
     );
+  }
+
+  Future<void> _waitForState(
+    BluetoothDevice device,
+    BluetoothConnectionState target,
+    Duration timeout,
+  ) async {
+    if (await device.connectionState.first == target) return;
+    await device.connectionState
+        .firstWhere((s) => s == target)
+        .timeout(timeout);
   }
 }

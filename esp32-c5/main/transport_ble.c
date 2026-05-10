@@ -4,6 +4,7 @@
 
 #ifndef CONFIG_BT_ENABLED
 void transport_ble_init(void) {}
+uint32_t transport_ble_connected_count(void) { return 0; }
 #else
 /* Full implementation below */
 #include <stdint.h>
@@ -205,13 +206,20 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
         uint16_t h = event->disconnect.conn.conn_handle;
         for (int i = 0; i < BLE_MAX_CONN; i++) {
             if (s_conn_handles[i] == h) {
-                s_conn_handles[i]    = BLE_HS_CONN_HANDLE_NONE;
+                /* Order matters: clear notify first so the tx_task stops
+                 * targeting this slot before the slot is freed. */
                 s_notify_enabled[i]  = false;
+                s_conn_handles[i]    = BLE_HS_CONN_HANDLE_NONE;
                 s_last_rx_sec[i]     = 0;
-                ESP_LOGI(TAG, "disconnected slot=%d h=%u", i, h);
+                ESP_LOGI(TAG, "disconnected slot=%d h=%u reason=0x%02x", i, h,
+                         event->disconnect.reason);
                 break;
             }
         }
+        /* Defensive: stop any in-flight advertising before restarting so the
+         * stack drops stale adv parameters from the prior session. EALREADY
+         * is fine — start_advertising() handles re-entry. */
+        ble_gap_adv_stop();
         start_advertising();
         return 0;
     }
@@ -345,5 +353,14 @@ void transport_ble_init(void)
     xTaskCreate(tx_task, "ble_tx", 4096, NULL, 4, NULL);
     io_register_sink(ble_sink, NULL);
     io_log("ble: host task started, waiting for sync\r\n");
+}
+
+uint32_t transport_ble_connected_count(void)
+{
+    uint32_t n = 0;
+    for (int i = 0; i < BLE_MAX_CONN; i++) {
+        if (s_conn_handles[i] != BLE_HS_CONN_HANDLE_NONE) { n++; }
+    }
+    return n;
 }
 #endif /* CONFIG_BT_ENABLED */

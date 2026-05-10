@@ -1,0 +1,8 @@
+# Build output
+bin/
+
+# Connect IQ developer signing keys — NEVER commit
+developer_key.der
+developer_key.pem
+*.der
+*.pem

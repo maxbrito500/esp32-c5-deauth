@@ -8,6 +8,7 @@
 #include "targets.h"
 #include "acl.h"
 #include "attack.h"
+#include "led.h"
 
 void app_main(void)
 {
@@ -26,5 +27,6 @@ void app_main(void)
     io_log("main: ble init done\r\n");
     wifi_ctrl_init();
     io_log("main: wifi up\r\n");
+    led_init();
     cli_init();
 }

@@ -11,6 +11,7 @@ idf_component_register(
         "acl.c"
         "sniffer.c"
         "attack.c"
+        "led.c"
     INCLUDE_DIRS "."
     PRIV_REQUIRES
         nvs_flash
