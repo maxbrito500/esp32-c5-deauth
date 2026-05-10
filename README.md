@@ -59,6 +59,24 @@ flashing, or running it you accept that responsibility.
 
 ---
 
+## Quick flash (browser, no install)
+
+The fastest way to get the firmware onto an ESP32-C5: plug the board in
+over USB-C and click this link in **Chrome or Edge** (Web Serial is
+required, so Firefox/Safari won't work).
+
+[**Flash ESP32-C5 Deauther in your browser →**](https://espressif.github.io/esp-launchpad/?flashConfigURL=https://raw.githubusercontent.com/maxbrito500/esp32-c5-deauth/flasher/config.toml)
+
+The page is Espressif's official **ESP Launchpad** with a preset that
+points at the firmware in this repo. Hit *Connect*, pick the serial
+port for the XIAO, then *Flash* — the merged binary is written at
+offset `0x0000`, no manual address juggling. Total time: under a minute.
+
+When the device is running, install the Android APK or Linux desktop
+app below to control it over BLE.
+
+---
+
 ## Downloads
 
 Pre-built binaries are published on the
@@ -67,7 +85,7 @@ page for every tagged version. No toolchain required:
 
 | File | Use it for |
 |------|-----------|
-| `esp32c5-deauther-firmware.zip` | ESP32-C5 firmware bundle. Unzip and flash with [esptool-js (web)](https://espressif.github.io/esptool-js/) or `esptool` — instructions inside the zip. |
+| `esp32c5-deauther-firmware.zip` | ESP32-C5 firmware bundle. Prefer the [browser flasher above](#quick-flash-browser-no-install); the zip is for offline / `esptool` users. |
 | `deauther-android.apk` | Android phones — single APK that runs on all CPU architectures (arm64, armv7, x86_64). |
 | `deauther-linux-x64.tar.gz` | Linux desktop. Extract and run `./deauther`. |
 | `SHA256SUMS` | Checksums to verify the downloads |

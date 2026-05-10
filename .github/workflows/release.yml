@@ -61,10 +61,27 @@ jobs:
           EOF
           ( cd release && zip -r esp32c5-deauther-firmware.zip firmware )
 
+      - name: Build merged binary for ESP Launchpad
+        shell: bash
+        run: |
+          . "$IDF_PATH/export.sh"
+          cd esp32-c5/build
+          esptool.py --chip esp32c5 merge_bin \
+            --output ../../release/esp32c5-deauther-merged.bin \
+            --flash_mode dio --flash_size 2MB --flash_freq 40m \
+            0x2000  bootloader/bootloader.bin \
+            0x8000  partition_table/partition-table.bin \
+            0x10000 esp32c5_deauther.bin
+
       - uses: actions/upload-artifact@v4
         with:
           name: firmware
           path: release/esp32c5-deauther-firmware.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-merged-bin
+          path: release/esp32c5-deauther-merged.bin
 
   # ─── Flutter Android APK ───────────────────────────────────────────────────
   android:
@@ -139,6 +156,35 @@ jobs:
         with:
           name: linux
           path: release/deauther-linux-x64.tar.gz
+
+  # ─── Refresh merged bin on flasher branch (web flasher backend) ────────────
+  publish-flasher:
+    name: Update web flasher
+    needs: firmware
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: flasher
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: firmware-merged-bin
+
+      - name: Commit and push refreshed binary
+        run: |
+          if git diff --quiet -- esp32c5-deauther-merged.bin; then
+            echo "Merged bin unchanged, nothing to push."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add esp32c5-deauther-merged.bin
+          git commit -m "Refresh merged firmware for ${{ github.ref_name }}"
+          git push origin flasher
 
   # ─── Publish GitHub Release with all artifacts ─────────────────────────────
   release:
