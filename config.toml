@@ -1,5 +1,5 @@
 esp_toml_version = 1.0
-firmware_images_url = "https://raw.githubusercontent.com/maxbrito500/esp32-c5-deauth/launchpad-test/"
+firmware_images_url = "https://raw.githubusercontent.com/maxbrito500/esp32-c5-deauth/flasher/"
 supported_apps = ["Deauther"]
 
 [Deauther]
