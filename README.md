@@ -68,8 +68,7 @@ page for every tagged version. No toolchain required:
 | File | Use it for |
 |------|-----------|
 | `esp32c5-deauther-firmware.zip` | ESP32-C5 firmware bundle. Unzip and flash with [esptool-js (web)](https://espressif.github.io/esptool-js/) or `esptool` — instructions inside the zip. |
-| `deauther-android-arm64.apk` | Android phones (64-bit; Pixel, recent Samsung/Xiaomi/etc.) |
-| `deauther-android-arm.apk` | Older 32-bit Android devices |
+| `deauther-android.apk` | Android phones — single APK that runs on all CPU architectures (arm64, armv7, x86_64). |
 | `deauther-linux-x64.tar.gz` | Linux desktop. Extract and run `./deauther`. |
 | `SHA256SUMS` | Checksums to verify the downloads |
 
@@ -87,37 +86,95 @@ key (see `garmin/run-fenix7pro.sh`).
 - USB-C cable (data, not charge-only) for flashing.
 - (Optional) Garmin Fenix 7 family watch.
 
-## Quick start — firmware
+## Build from source (Ubuntu 22.04 / 24.04)
+
+Tested on a clean Ubuntu install. Each component can be built
+independently — install only the toolchain you need.
+
+### ESP32-C5 firmware
 
 ```sh
-cd esp32-c5
-# One-time: patch the wifi static lib so spoofed-SA frames go out
-cp patched_libnet/libnet80211.a $IDF_PATH/components/esp_wifi/lib/esp32c5/
-# Build + flash + monitor via USB JTAG
+# 1. System packages required by ESP-IDF.
+sudo apt-get update
+sudo apt-get install -y \
+    git wget flex bison gperf python3 python3-venv python3-pip \
+    cmake ninja-build ccache dfu-util libusb-1.0-0 \
+    libffi-dev libssl-dev
+
+# 2. Clone ESP-IDF v5.5.1 (matches the patched libnet80211.a).
+mkdir -p ~/esp && cd ~/esp
+git clone -b v5.5.1 --recursive https://github.com/espressif/esp-idf.git
+cd esp-idf
+./install.sh esp32c5            # downloads RISC-V toolchain + tools
+
+# 3. Activate the toolchain in your current shell.
+. ~/esp/esp-idf/export.sh        # add this to ~/.bashrc to make it permanent
+
+# 4. Apply the wifi patch and build.
+cd /path/to/this/repo/esp32-c5
+cp patched_libnet/libnet80211.a "$IDF_PATH/components/esp_wifi/lib/esp32c5/"
+idf.py set-target esp32c5
+idf.py build
+
+# 5. Flash via USB-C JTAG (no BOOT/RESET button presses needed).
 ./flash.sh
 ```
 
-Full setup (including VS Code and the patched libnet80211 note) is in
-[`esp32-c5/README.md`](esp32-c5/README.md).
+The patched `libnet80211.a` makes `esp_wifi_80211_tx()` accept
+management frames with a spoofed source address — required for
+deauthentication on the C5's 5 GHz radio. The original library is kept
+as `libnet80211.a.orig` after the first patch.
 
-## Quick start — Flutter app
-
-```sh
-cd flutter
-flutter run -d linux       # or: -d android, with USB debugging enabled
-```
-
-## Quick start — Garmin app
+### Flutter — Android APK
 
 ```sh
-cd garmin
-# Build the .prg for the Fenix 7 Pro
-./run-fenix7pro.sh
-# Plug the watch in MTP mode and sideload
-./sideload.sh
+# 1. JDK 17.
+sudo apt-get install -y openjdk-17-jdk
+
+# 2. Flutter SDK (stable channel).
+git clone -b stable --depth 1 https://github.com/flutter/flutter.git ~/flutter
+echo 'export PATH="$HOME/flutter/bin:$PATH"' >> ~/.bashrc
+export PATH="$HOME/flutter/bin:$PATH"
+
+# 3. Android command-line tools — point Flutter at your Android SDK
+#    (Android Studio installs this; otherwise grab "command-line tools
+#    only" from https://developer.android.com/studio and unzip into
+#    ~/Android/Sdk/cmdline-tools/latest/, then accept licenses).
+flutter doctor --android-licenses
+flutter doctor                      # should be all green for Android
+
+# 4. Build a universal APK that runs on every CPU architecture.
+cd /path/to/this/repo/flutter
+flutter pub get
+flutter build apk --release
+ls build/app/outputs/flutter-apk/app-release.apk
 ```
 
-Then launch **Deauther** from the watch's Connect IQ apps menu.
+Install on a phone with `adb install` (USB debugging enabled) or by
+copying the `.apk` to the phone and tapping it.
+
+### Flutter — Linux desktop
+
+```sh
+# 1. GTK and build tools.
+sudo apt-get install -y \
+    clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
+    libsecret-1-dev libjsoncpp-dev
+
+# 2. Flutter SDK (same as above).
+flutter config --enable-linux-desktop
+
+# 3. Build and run.
+cd /path/to/this/repo/flutter
+flutter pub get
+flutter run -d linux                 # or: flutter build linux --release
+```
+
+### Garmin watch app
+
+The Garmin SDK requires a (free) developer account — see
+[`garmin/`](garmin/) for the build scripts (`run-fenix7pro.sh`,
+`sideload.sh`).
 
 ---
 

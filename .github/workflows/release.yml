@@ -83,24 +83,25 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Build APK (release)
+      - name: Build APK (release, universal)
         working-directory: flutter
         run: |
           flutter pub get
-          flutter build apk --release --split-per-abi
+          # Single APK that runs on all Android architectures (arm64, armv7,
+          # x86_64). Slightly larger than per-ABI splits but one file users
+          # can install on any phone.
+          flutter build apk --release
 
-      - name: Stage APKs
+      - name: Stage APK
         run: |
           mkdir -p release
-          cp flutter/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk \
-             release/deauther-android-arm64.apk
-          cp flutter/build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk \
-             release/deauther-android-arm.apk
+          cp flutter/build/app/outputs/flutter-apk/app-release.apk \
+             release/deauther-android.apk
 
       - uses: actions/upload-artifact@v4
         with:
           name: android
-          path: release/*.apk
+          path: release/deauther-android.apk
 
   # ─── Flutter Linux desktop ─────────────────────────────────────────────────
   linux:
@@ -156,8 +157,8 @@ jobs:
         run: |
           mkdir -p release
           mv artifacts/firmware/esp32c5-deauther-firmware.zip release/
-          mv artifacts/android/*.apk release/
-          mv artifacts/linux/deauther-linux-x64.tar.gz release/
+          mv artifacts/android/deauther-android.apk           release/
+          mv artifacts/linux/deauther-linux-x64.tar.gz        release/
           ls -la release/
 
       - name: Generate SHA256 checksums
@@ -176,8 +177,7 @@ jobs:
             | File | What |
             |------|------|
             | `esp32c5-deauther-firmware.zip` | ESP32-C5 firmware bundle (bootloader + partition table + app + flash command). Flash with `esptool` or [esptool-js web flasher](https://espressif.github.io/esptool-js/). |
-            | `deauther-android-arm64.apk` | Android app for 64-bit phones (most modern devices). |
-            | `deauther-android-arm.apk` | Android app for 32-bit phones (older devices). |
+            | `deauther-android.apk` | Android app — universal APK for all CPU architectures (arm64, armv7, x86_64). |
             | `deauther-linux-x64.tar.gz` | Linux desktop binary. Extract and run `./deauther`. |
             | `SHA256SUMS` | Checksums for all of the above. |
 
