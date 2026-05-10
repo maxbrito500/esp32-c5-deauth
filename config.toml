@@ -1,0 +1,10 @@
+esp_toml_version = 1.0
+firmware_images_url = "https://raw.githubusercontent.com/maxbrito500/esp32-c5-deauth/launchpad-test/"
+supported_apps = ["Deauther"]
+
+[Deauther]
+chipsets = ["ESP32-C5"]
+image.esp32c5 = "esp32c5-deauther-merged.bin"
+android_app_url = ""
+ios_app_url = ""
+readme.text = "ESP32-C5 Deauther — dual-band Wi-Fi deauthentication firmware. Connect over USB-C, click Connect, then Flash. Authorized testing only."
